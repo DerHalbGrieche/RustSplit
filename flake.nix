@@ -41,8 +41,17 @@
 
             cargoLock.lockFile = ./Cargo.lock;
 
-            nativeBuildInputs = [ pkgs.pkg-config ];
+            nativeBuildInputs = with pkgs; [
+              addDriverRunpath
+              makeWrapper
+              pkg-config
+            ];
             buildInputs = runtimeDeps pkgs;
+
+            postFixup = ''
+              wrapProgram $out/bin/rustsplit \
+                --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeDeps pkgs)}
+            '';
 
             meta = with pkgs.lib; {
               description = "A native Rust rewrite of LiveSplit";
