@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/livesplit-core",
+    "crates/livesplit-ui",
+    "crates/livesplit-server",
+    "crates/rustsplit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+authors = ["RustSplit contributors"]
+
+[workspace.dependencies]
+livesplit-core = { path = "crates/livesplit-core" }
+livesplit-ui = { path = "crates/livesplit-ui" }
+livesplit-server = { path = "crates/livesplit-server" }
+
+anyhow = "1.0.100"
+base64 = "0.22.1"
+chrono = { version = "0.4.43", default-features = false, features = ["clock", "serde", "std"] }
+clap = { version = "4.5.53", features = ["derive"] }
+directories = "6.0.0"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.37.0"
+env_logger = "0.11.8"
+global-hotkey = "0.9.0"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "ico", "webp", "bmp"] }
+log = "0.4.28"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.17"
+toml = "0.9.10"
+xmltree = "0.12.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 1

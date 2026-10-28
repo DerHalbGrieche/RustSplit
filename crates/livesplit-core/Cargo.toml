@@ -1,0 +1,14 @@
+[package]
+name = "livesplit-core"
+description = "Timer, run model, comparisons and split file parsing for RustSplit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+xmltree.workspace = true

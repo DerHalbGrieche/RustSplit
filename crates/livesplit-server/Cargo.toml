@@ -1,0 +1,12 @@
+[package]
+name = "livesplit-server"
+description = "LiveSplit Server compatible remote control protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+livesplit-core.workspace = true
+log.workspace = true
+thiserror.workspace = true

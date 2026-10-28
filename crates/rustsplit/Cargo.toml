@@ -1,0 +1,29 @@
+[package]
+name = "rustsplit"
+description = "A native Rust rewrite of LiveSplit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+default-run = "rustsplit"
+
+[[bin]]
+name = "rustsplit"
+path = "src/main.rs"
+
+[dependencies]
+livesplit-core.workspace = true
+livesplit-ui.workspace = true
+livesplit-server.workspace = true
+
+chrono.workspace = true
+clap.workspace = true
+directories.workspace = true
+eframe.workspace = true
+egui.workspace = true
+env_logger.workspace = true
+global-hotkey.workspace = true
+image.workspace = true
+log.workspace = true
+serde.workspace = true
+toml.workspace = true
