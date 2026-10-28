@@ -1,4 +1,6 @@
 /target
+/result
+.direnv/
 **/*.rs.bk
 *.lss.tmp
 settings.toml.tmp
