@@ -51,7 +51,11 @@ pub struct WindowLayout {
     #[serde(default)]
     pub window_size: Option<[i32; 2]>,
     #[serde(default)]
+    pub tile_size: Option<[f64; 2]>,
+    #[serde(default)]
     pub tile_pos_in_workspace_view: Option<[f64; 2]>,
+    #[serde(default)]
+    pub window_offset_in_tile: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -203,6 +207,7 @@ pub struct NiriIntegration {
     started: Instant,
     next_probe: Instant,
     next_track: Instant,
+    next_surface_sync: Instant,
 }
 
 impl NiriIntegration {
@@ -228,6 +233,7 @@ impl NiriIntegration {
             started: Instant::now(),
             next_probe: Instant::now(),
             next_track: Instant::now(),
+            next_surface_sync: Instant::now(),
         })
     }
 
@@ -258,23 +264,31 @@ impl NiriIntegration {
             return Ok(None);
         };
 
-        self.window_id = Some(window.id);
-        let mut floating = window.is_floating;
-        if !floating && auto_float {
-            self.niri
-                .action(json!({ "MoveWindowToFloating": { "id": window.id } }))?;
-            floating = true;
-        }
-        if !floating {
+        if !window.is_floating {
+            if auto_float {
+                if self.window_id != Some(window.id) {
+                    self.niri
+                        .action(json!({ "MoveWindowToFloating": { "id": window.id } }))?;
+                    self.window_id = Some(window.id);
+                }
+                // Give Niri a moment to finish the floating transition before
+                // setting the size. Otherwise the transition can overwrite it
+                // with the size the window had while tiled.
+                self.next_probe = Instant::now() + Duration::from_millis(200);
+                return Ok(None);
+            }
+
             // The user asked us not to float the window (or a window rule
             // explicitly keeps it tiled). There is no useful geometry to
             // restore until it is floating.
+            self.window_id = Some(window.id);
             self.applied = true;
             return Ok(Some(
                 "Niri: leaving RustSplit in the tiling layout as configured.".to_string(),
             ));
         }
 
+        self.window_id = Some(window.id);
         let width = desired.width.max(1);
         let height = desired.height.max(1);
         self.niri.action(json!({
@@ -310,6 +324,7 @@ impl NiriIntegration {
 
         self.applied = true;
         self.next_track = Instant::now() + TRACK_INTERVAL;
+        self.next_surface_sync = Instant::now() + Duration::from_millis(100);
         log::info!(
             "Niri: floating RustSplit window {} at {},{} ({}x{})",
             window.id,
@@ -324,6 +339,37 @@ impl NiriIntegration {
     /// Whether it is time to sample the current floating geometry.
     pub fn tracking_due(&self) -> bool {
         self.applied && !self.gave_up && Instant::now() >= self.next_track
+    }
+
+    /// Whether it is time to sync the client surface with Niri's visual tile.
+    pub fn surface_sync_due(&self) -> bool {
+        self.applied && !self.gave_up && Instant::now() >= self.next_surface_sync
+    }
+
+    /// Niri's visual size for the floating window.
+    ///
+    /// Niri can resize a floating window without sending an xdg configure
+    /// event, so the client surface needs to be resized to this size manually
+    /// or Niri will scale/letterbox the old surface.
+    pub fn visual_size(&mut self) -> Result<Option<(f32, f32)>, String> {
+        self.next_surface_sync = Instant::now() + Duration::from_millis(100);
+        let Some(window) = self.find_window()? else {
+            self.window_id = None;
+            return Ok(None);
+        };
+        if !window.is_floating {
+            return Ok(None);
+        }
+        let Some([width, height]) = window.layout.tile_size else {
+            return Ok(None);
+        };
+        let [offset_x, offset_y] = window.layout.window_offset_in_tile.unwrap_or([0.0, 0.0]);
+        let width = width - 2.0 * offset_x.max(0.0);
+        let height = height - 2.0 * offset_y.max(0.0);
+        if !width.is_finite() || !height.is_finite() || width <= 1.0 || height <= 1.0 {
+            return Ok(None);
+        }
+        Ok(Some((width as f32, height as f32)))
     }
 
     /// Read back the current floating geometry.
@@ -383,7 +429,9 @@ mod tests {
             is_floating: floating,
             layout: WindowLayout {
                 window_size: Some([286, 400]),
+                tile_size: Some([286.0, 400.0]),
                 tile_pos_in_workspace_view: Some([100.0, 120.0]),
+                window_offset_in_tile: Some([0.0, 0.0]),
             },
         }
     }
@@ -431,6 +479,7 @@ mod tests {
         let found = find_window(&windows, 1234, APP_ID).unwrap();
         assert!(found.is_floating);
         assert_eq!(found.layout.window_size, Some([500, 300]));
+        assert_eq!(found.layout.tile_size, Some([500.0, 300.0]));
         assert_eq!(
             found.layout.tile_pos_in_workspace_view,
             Some([100.0, 144.0])

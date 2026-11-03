@@ -108,6 +108,28 @@ impl Renderer {
             .min(available.height() / base_height)
             .clamp(0.05, 16.0);
 
+        // Scale uniformly, then expand the virtual layout to the window's
+        // aspect ratio. Flexible components absorb the extra space, so the
+        // overlay fills the window without stretching text or leaving black
+        // bars when the user resizes it freely.
+        let virtual_width = (available.width() / scale).max(base_width);
+        let virtual_height = (available.height() / scale).max(base_height);
+        let extra_width = (virtual_width - base_width).max(0.0);
+        let extra_height = (virtual_height - base_height).max(0.0);
+        let flexible = layout
+            .components
+            .iter()
+            .position(|component| component.component.is_flexible())
+            .or_else(|| {
+                layout.components.iter().rposition(|component| match layout.mode {
+                    LayoutMode::Vertical => {
+                        component.component.natural_height(timer, 1.0) > 0.0
+                    }
+                    LayoutMode::Horizontal => {
+                        component.component.natural_width(timer, 1.0) > 0.0
+                    }
+                })
+            });
 
         let mut root = ui.new_child(
             egui::UiBuilder::new()
@@ -120,7 +142,10 @@ impl Renderer {
         // This keeps component code simple and produces LiveSplit-style
         // proportional resizing without double-scaling fonts or row heights.
         let transform = TSTransform::new(available.min.to_vec2(), scale);
-        let virtual_rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(base_width, base_height));
+        let virtual_rect = Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(virtual_width, virtual_height),
+        );
 
         if let Some(path) = &layout.settings.background_image {
             self.ensure_background(ui.ctx(), path);
@@ -166,15 +191,20 @@ impl Renderer {
             match layout.mode {
                 LayoutMode::Vertical => {
                     let mut y = 0.0;
-                    for component in &layout.components {
-                        let height = component.component.natural_height(timer, 1.0);
+                    let mut remaining_extra = extra_height;
+                    for (index, component) in layout.components.iter().enumerate() {
+                        let mut height = component.component.natural_height(timer, 1.0);
                         if height <= 0.0 {
                             last_rects.push(Rect::NOTHING);
                             continue;
                         }
+                        if flexible == Some(index) {
+                            height += remaining_extra;
+                            remaining_extra = 0.0;
+                        }
                         let rect = Rect::from_min_size(
                             egui::pos2(0.0, y),
-                            egui::vec2(base_width, height),
+                            egui::vec2(virtual_width, height),
                         );
                         last_rects.push(Rect::from_min_max(
                             transform * rect.min,
@@ -204,15 +234,20 @@ impl Renderer {
                 }
                 LayoutMode::Horizontal => {
                     let mut x = 0.0;
-                    for component in &layout.components {
-                        let width = component.component.natural_width(timer, 1.0);
+                    let mut remaining_extra = extra_width;
+                    for (index, component) in layout.components.iter().enumerate() {
+                        let mut width = component.component.natural_width(timer, 1.0);
                         if width <= 0.0 {
                             last_rects.push(Rect::NOTHING);
                             continue;
                         }
+                        if flexible == Some(index) {
+                            width += remaining_extra;
+                            remaining_extra = 0.0;
+                        }
                         let rect = Rect::from_min_size(
                             egui::pos2(x, 0.0),
-                            egui::vec2(width, base_height),
+                            egui::vec2(width, virtual_height),
                         );
                         last_rects.push(Rect::from_min_max(
                             transform * rect.min,

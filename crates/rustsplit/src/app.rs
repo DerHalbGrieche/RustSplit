@@ -632,23 +632,23 @@ impl RustSplitApp {
             )
         });
         if ctrl {
-            if ctx.input(|input| input.key_pressed(Key::Q)) {
+            if key_pressed_once(ctx, Key::Q) {
                 self.pending_actions.push(Action::Quit);
             }
-            if ctx.input(|input| input.key_pressed(Key::S)) {
+            if key_pressed_once(ctx, Key::S) {
                 self.pending_actions.push(if shift {
                     Action::SaveRunAs
                 } else {
                     Action::SaveRun
                 });
             }
-            if ctx.input(|input| input.key_pressed(Key::O)) {
+            if key_pressed_once(ctx, Key::O) {
                 self.pending_actions.push(Action::OpenRun);
             }
-            if ctx.input(|input| input.key_pressed(Key::E)) {
+            if key_pressed_once(ctx, Key::E) {
                 self.pending_actions.push(Action::EditRun);
             }
-            if ctx.input(|input| input.key_pressed(Key::L)) {
+            if key_pressed_once(ctx, Key::L) {
                 self.pending_actions.push(Action::EditLayout);
             }
             return;
@@ -656,31 +656,31 @@ impl RustSplitApp {
         if alt {
             return;
         }
-        if ctx.input(|input| input.key_pressed(Key::Space)) {
+        if key_pressed_once(ctx, Key::Space) {
             self.pending_actions.push(Action::StartSplit);
         }
-        if ctx.input(|input| input.key_pressed(Key::R)) {
+        if key_pressed_once(ctx, Key::R) {
             self.pending_actions.push(Action::Reset);
         }
-        if ctx.input(|input| input.key_pressed(Key::Backspace)) {
+        if key_pressed_once(ctx, Key::Backspace) {
             self.pending_actions.push(Action::Undo);
         }
-        if ctx.input(|input| input.key_pressed(Key::Delete)) {
+        if key_pressed_once(ctx, Key::Delete) {
             self.pending_actions.push(Action::Skip);
         }
-        if ctx.input(|input| input.key_pressed(Key::P)) {
+        if key_pressed_once(ctx, Key::P) {
             self.pending_actions.push(Action::Pause);
         }
-        if ctx.input(|input| input.key_pressed(Key::U)) {
+        if key_pressed_once(ctx, Key::U) {
             self.pending_actions.push(Action::UndoAllPauses);
         }
-        if ctx.input(|input| input.key_pressed(Key::G)) {
+        if key_pressed_once(ctx, Key::G) {
             self.pending_actions.push(Action::ToggleTimingMethod);
         }
-        if ctx.input(|input| input.key_pressed(Key::F1)) {
+        if key_pressed_once(ctx, Key::F1) {
             self.pending_actions.push(Action::Settings);
         }
-        if ctx.input(|input| input.key_pressed(Key::Tab)) {
+        if key_pressed_once(ctx, Key::Tab) {
             self.pending_actions.push(if shift {
                 Action::SwitchComparisonPrevious
             } else {
@@ -1330,11 +1330,54 @@ impl RustSplitApp {
             self.last_title = title.clone();
             ctx.send_viewport_cmd(ViewportCommand::Title(title));
         }
-        if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
-            self.last_window_size = Some(rect.size());
+        let inner_rect = ctx.input(|input| input.viewport().inner_rect);
+        if let Some(rect) = inner_rect {
             self.last_window_pos = Some(rect.min);
         }
+        // Wayland compositors do not expose a window position, which makes
+        // egui's `inner_rect` unavailable there. `content_rect` still tracks
+        // the content size, so use it as a fallback.
+        let size = inner_rect
+            .map(|rect| rect.size())
+            .unwrap_or_else(|| ctx.content_rect().size());
+        if size.x > 1.0 && size.y > 1.0 {
+            self.last_window_size = Some(size);
+        }
         self.track_niri_geometry(false);
+        self.sync_niri_surface(ctx);
+    }
+
+    /// Niri can resize floating windows without sending a new xdg configure
+    /// event. Keep the client surface in sync with Niri's visual tile size,
+    /// otherwise Niri scales/letterboxes the old surface.
+    fn sync_niri_surface(&mut self, ctx: &Context) {
+        if self.any_modal_open() {
+            return;
+        }
+        let Some(niri) = self.niri.as_mut() else {
+            return;
+        };
+        if !niri.is_applied() {
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
+        if !niri.surface_sync_due() {
+            return;
+        }
+        match niri.visual_size() {
+            Ok(Some((width, height))) => {
+                let target = egui::vec2(width, height);
+                if self
+                    .last_window_size
+                    .is_none_or(|size| (size - target).length_sq() > 4.0)
+                {
+                    log::debug!("Niri: resizing client surface to {width}x{height}");
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(target));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => log::debug!("could not read Niri window size: {error}"),
+        }
     }
 
     fn track_niri_geometry(&mut self, force: bool) {
@@ -1485,6 +1528,24 @@ fn server_command_mutates_run(command: &ServerCommand) -> bool {
     )
 }
 
+/// Ignore OS key-repeat events so holding a key cannot trigger a split
+/// multiple times in a row.
+fn key_pressed_once(ctx: &Context, key: Key) -> bool {
+    ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: pressed_key,
+                    pressed: true,
+                    repeat: false,
+                    ..
+                } if *pressed_key == key
+            )
+        })
+    })
+}
+
 fn default_layout_name(layout: &Layout) -> String {
     layout
         .file_path
@@ -1547,6 +1608,10 @@ pub fn native_options(
 
     eframe::NativeOptions {
         viewport,
+        // RustSplit persists its own window/overlay geometry. eframe's
+        // generic window persistence would restore stale tiled sizes and
+        // fight the Niri integration.
+        persist_window: false,
         ..Default::default()
     }
 }
