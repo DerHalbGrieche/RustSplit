@@ -48,6 +48,13 @@
             ];
             buildInputs = runtimeDeps pkgs;
 
+            postInstall = ''
+              install -Dm644 crates/rustsplit/assets/rustsplit.desktop \
+                $out/share/applications/rustsplit.desktop
+              install -Dm644 crates/rustsplit/assets/icon.png \
+                $out/share/icons/hicolor/256x256/apps/rustsplit.png
+            '';
+
             postFixup = ''
               wrapProgram $out/bin/rustsplit \
                 --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeDeps pkgs)}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=RustSplit
+GenericName=Speedrun Timer
+Comment=A native Rust rewrite of LiveSplit
+Exec=rustsplit
+Icon=rustsplit
+Terminal=false
+Categories=Utility;Game;
+Keywords=speedrun;timer;livesplit;
+StartupNotify=true
+StartupWMClass=rustsplit
