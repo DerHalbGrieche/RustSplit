@@ -1437,6 +1437,13 @@ impl RustSplitApp {
 }
 
 impl eframe::App for RustSplitApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The overlay background is painted by the layout. Without this,
+        // eframe clears the window with a semi-opaque dark color, which shows
+        // up as an opaque box whenever the layout background is transparent.
+        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_global_hotkeys();

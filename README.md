@@ -131,6 +131,9 @@ with a Niri window rule. The Wayland application id is `rustsplit`:
 window-rule {
     match app-id=r#"^rustsplit$"#
     open-floating true
+    // Niri otherwise fills transparent windows with the focus-ring gradient
+    // while they are focused.
+    draw-border-with-background false
 }
 ```
 
