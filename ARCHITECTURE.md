@@ -71,9 +71,13 @@ The desktop application and integration layer:
 
 - `main.rs` — CLI, startup, window options.
 - `app.rs` — eframe app, context menu, shortcuts, global hotkeys, server
-  polling, dialogs and persistence.
+  polling, Niri geometry tracking, dialogs and persistence.
 - `config.rs` — `settings.toml` model and recent-file handling.
+- `control.rs` — local Unix control socket used by compositor key bindings
+  (`rustsplit --command ...`).
 - `file_dialog.rs` — dependency-free file browser.
+- `niri.rs` — Niri IPC client that floats the overlay and restores its
+  floating position and size.
 - `run_editor.rs` — splits/segment/comparison/attempt editor.
 - `layout_editor.rs` — component list, component settings and global theme.
 - `hotkeys.rs` — global hotkey registration and action mapping.

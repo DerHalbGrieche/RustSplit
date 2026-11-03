@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub hotkeys: HotkeyConfig,
     pub server: ServerConfig,
     pub window: WindowConfig,
+    pub niri: NiriConfig,
 }
 
 impl Default for AppConfig {
@@ -21,6 +22,7 @@ impl Default for AppConfig {
             hotkeys: HotkeyConfig::default(),
             server: ServerConfig::default(),
             window: WindowConfig::default(),
+            niri: NiriConfig::default(),
         }
     }
 }
@@ -123,6 +125,35 @@ impl Default for WindowConfig {
     }
 }
 
+/// Niri-specific overlay geometry.
+///
+/// Niri manages floating windows itself, so its position is kept separate
+/// from the generic window position used on X11 and Windows. `x` and `y` are
+/// relative to Niri's working area (below layer-shell panels such as a bar).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NiriConfig {
+    pub enabled: bool,
+    pub auto_float: bool,
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
+
+impl Default for NiriConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_float: true,
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+        }
+    }
+}
+
 impl AppConfig {
     pub fn default_path() -> PathBuf {
         ProjectDirs::from("org", "RustSplit", "rustsplit")
@@ -189,6 +220,8 @@ mod tests {
         config.general.autosave = false;
         config.server.port = 23456;
         config.hotkeys.start_split = "F1".to_string();
+        config.niri.auto_float = false;
+        config.niri.x = Some(42.0);
         let directory = std::env::temp_dir().join(format!(
             "rustsplit-config-test-{}",
             std::process::id()
@@ -199,6 +232,8 @@ mod tests {
         assert!(!loaded.general.autosave);
         assert_eq!(loaded.server.port, 23456);
         assert_eq!(loaded.hotkeys.start_split, "F1");
+        assert!(!loaded.niri.auto_float);
+        assert_eq!(loaded.niri.x, Some(42.0));
         let _ = std::fs::remove_dir_all(directory);
     }
 }

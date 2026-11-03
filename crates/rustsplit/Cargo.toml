@@ -26,4 +26,5 @@ global-hotkey.workspace = true
 image.workspace = true
 log.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true

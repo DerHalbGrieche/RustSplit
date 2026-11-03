@@ -9,15 +9,17 @@ use egui::{
     ViewportCommand, WindowLevel,
 };
 use livesplit_core::{load_run, save_run, Run, Timer, TimerPhase, TimingMethod};
-use livesplit_server::{handle_command, ServerCommand, ServerHandle};
+use livesplit_server::{handle_command, parse_command, ServerCommand, ServerHandle};
 use livesplit_ui::{
     configure_fonts, load_layout, save_layout, Layout, LayoutMode, Renderer,
 };
 
 use crate::config::AppConfig;
+use crate::control::ControlServer;
 use crate::file_dialog::{FileDialog, FileDialogAction, FileDialogMode};
 use crate::hotkeys::{GlobalHotkeys, HotkeyAction};
 use crate::layout_editor::{LayoutEditor, LayoutEditorEvent};
+use crate::niri::{self, DesiredWindow, NiriIntegration};
 use crate::run_editor::{RunEditor, RunEditorEvent};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +79,8 @@ pub struct RustSplitApp {
     hotkeys: GlobalHotkeys,
     server: Option<ServerHandle>,
     server_error: Option<String>,
+    control: Option<ControlServer>,
+    niri: Option<NiriIntegration>,
     pending_actions: Vec<Action>,
     last_window_size: Option<egui::Vec2>,
     last_window_pos: Option<egui::Pos2>,
@@ -102,6 +106,14 @@ impl RustSplitApp {
         cc.egui_ctx.set_visuals(visuals);
 
         let resizable = layout.settings.allow_resizing;
+        let niri = NiriIntegration::new(&config.niri);
+        let control = match ControlServer::start(cc.egui_ctx.clone()) {
+            Ok(server) => server,
+            Err(error) => {
+                log::warn!("could not start the control socket: {error}");
+                None
+            }
+        };
         let mut app = Self {
             timer,
             layout,
@@ -122,6 +134,8 @@ impl RustSplitApp {
             hotkeys: GlobalHotkeys::default(),
             server: None,
             server_error: None,
+            control,
+            niri,
             pending_actions: Vec::new(),
             last_window_size: None,
             last_window_pos: None,
@@ -694,6 +708,16 @@ impl RustSplitApp {
         }
     }
 
+    fn sync_niri(&mut self) {
+        if !self.config.niri.enabled {
+            self.niri = None;
+            return;
+        }
+        if self.niri.is_none() {
+            self.niri = NiriIntegration::new(&self.config.niri);
+        }
+    }
+
     fn start_server(&mut self) {
         if self.server.is_some() {
             return;
@@ -740,34 +764,114 @@ impl RustSplitApp {
             let Some(request) = request else {
                 break;
             };
-            match &request.command {
-                ServerCommand::SwitchSplits(path) => {
-                    let path = PathBuf::from(path);
-                    let ok = self.open_run_path(ctx, &path);
-                    request.respond(Some(if ok { "True" } else { "False" }.to_string()));
-                    continue;
-                }
-                ServerCommand::SwitchLayout(path) => {
-                    let path = PathBuf::from(path);
-                    let ok = self.open_layout_path(ctx, &path);
-                    request.respond(Some(if ok { "True" } else { "False" }.to_string()));
-                    continue;
-                }
-                _ => {}
+            let response = self.apply_server_command(ctx, &request.command);
+            request.respond(response);
+        }
+    }
+
+    fn apply_server_command(
+        &mut self,
+        ctx: &Context,
+        command: &ServerCommand,
+    ) -> Option<String> {
+        match command {
+            ServerCommand::SwitchSplits(path) => {
+                let ok = self.open_run_path(ctx, &PathBuf::from(path));
+                return Some(if ok { "True" } else { "False" }.to_string());
             }
-            let autosave = server_command_mutates_run(&request.command);
-            let outcome = handle_command(&mut self.timer, &request.command);
-            request.respond(outcome.response.clone());
-            if outcome.save {
-                let _ = self.save_current_run(false);
+            ServerCommand::SwitchLayout(path) => {
+                let ok = self.open_layout_path(ctx, &PathBuf::from(path));
+                return Some(if ok { "True" } else { "False" }.to_string());
             }
-            if autosave {
-                self.autosave_after_change();
-            }
-            if outcome.quit {
-                self.save_config();
-                std::process::exit(0);
-            }
+            _ => {}
+        }
+
+        let autosave = server_command_mutates_run(command);
+        let outcome = handle_command(&mut self.timer, command);
+        let response = outcome.response.clone();
+        if outcome.save {
+            let _ = self.save_current_run(false);
+        }
+        if autosave {
+            self.autosave_after_change();
+        }
+        if outcome.quit {
+            self.save_config();
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
+        response
+    }
+
+    fn poll_control(&mut self, ctx: &Context) {
+        loop {
+            let request = {
+                let Some(control) = &self.control else {
+                    break;
+                };
+                control.try_recv()
+            };
+            let Some(request) = request else {
+                break;
+            };
+            let response = self.apply_control_command(ctx, &request.command);
+            request.respond(response);
+        }
+    }
+
+    fn apply_control_command(&mut self, ctx: &Context, command: &str) -> Option<String> {
+        let command = command.trim();
+        let action = match command.to_ascii_lowercase().as_str() {
+            "editrun" | "edit-run" | "editsplits" => Some(Action::EditRun),
+            "editlayout" | "edit-layout" => Some(Action::EditLayout),
+            "settings" => Some(Action::Settings),
+            _ => None,
+        };
+        if let Some(action) = action {
+            self.pending_actions.push(action);
+            return Some("ok".to_string());
+        }
+
+        match parse_command(command) {
+            Ok(command) => self.apply_server_command(ctx, &command),
+            Err(error) => Some(format!("error: {error}")),
+        }
+    }
+
+    fn poll_niri(&mut self, ctx: &Context) {
+        let desired = self.desired_niri_window();
+        let auto_float = self.config.niri.auto_float;
+        let Some(niri) = self.niri.as_mut() else {
+            return;
+        };
+        match niri.poll(auto_float, desired) {
+            Ok(Some(message)) => log::info!("{message}"),
+            Ok(None) => {}
+            Err(error) => log::warn!("Niri integration: {error}"),
+        }
+        if !niri.is_applied() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    fn desired_niri_window(&self) -> DesiredWindow {
+        let (fallback_width, fallback_height) = computed_window_size(&self.layout, &self.timer);
+        let width = self
+            .config
+            .niri
+            .width
+            .unwrap_or(fallback_width)
+            .max(80.0);
+        let height = self
+            .config
+            .niri
+            .height
+            .unwrap_or(fallback_height)
+            .max(40.0);
+        DesiredWindow {
+            x: self.config.niri.x.map(f64::from),
+            y: self.config.niri.y.map(f64::from),
+            width: width.round() as i32,
+            height: height.round() as i32,
         }
     }
 
@@ -796,7 +900,10 @@ impl RustSplitApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                 ui.heading("Hotkeys");
-                ui.checkbox(&mut draft.hotkeys.enabled, "Enable global hotkeys (Linux: X11 only)");
+                ui.checkbox(
+                    &mut draft.hotkeys.enabled,
+                    "Enable global hotkeys (X11 only; use compositor binds on Wayland)",
+                );
                 if let Some(error) = &hotkey_error {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }
@@ -819,6 +926,13 @@ impl RustSplitApp {
                     RichText::new("Use names like Space, F1, control+KeyS, shift+alt+KeyR.")
                         .small()
                         .color(ui.visuals().weak_text_color()),
+                );
+                ui.label(
+                    RichText::new(
+                        "Wayland/Niri: bind `rustsplit --command startorsplit` in your compositor instead.",
+                    )
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
                 );
                 ui.separator();
                 ui.heading("LiveSplit Server");
@@ -843,6 +957,22 @@ impl RustSplitApp {
                     &mut draft.general.autosave_layout,
                     "Autosave layout after applying",
                 );
+                if niri::is_session() {
+                    ui.separator();
+                    ui.heading("Niri");
+                    ui.checkbox(&mut draft.niri.enabled, "Enable Niri integration");
+                    ui.checkbox(
+                        &mut draft.niri.auto_float,
+                        "Float the overlay automatically",
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Uses Niri's IPC socket to float the overlay and remember its position and size.",
+                        )
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                }
                 if ui.button("Apply").clicked() {
                     apply = true;
                 }
@@ -871,6 +1001,7 @@ impl RustSplitApp {
                     self.start_server();
                 }
             }
+            self.sync_niri();
             self.save_config();
             if !self.settings_open {
                 self.settings_draft = None;
@@ -1144,7 +1275,7 @@ impl RustSplitApp {
         let hotkeys_ready = self.config.hotkeys.enabled && self.hotkeys.error.is_none();
         let wanted_passthrough = self.layout.settings.mouse_pass_through_while_running
             && self.timer.phase == TimerPhase::Running
-            && (hotkeys_ready || self.server.is_some());
+            && (hotkeys_ready || self.server.is_some() || self.control.is_some());
         if wanted_passthrough != self.passthrough {
             self.passthrough = wanted_passthrough;
             ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(wanted_passthrough));
@@ -1203,6 +1334,27 @@ impl RustSplitApp {
             self.last_window_size = Some(rect.size());
             self.last_window_pos = Some(rect.min);
         }
+        self.track_niri_geometry(false);
+    }
+
+    fn track_niri_geometry(&mut self, force: bool) {
+        let modal_open = self.any_modal_open();
+        let Some(niri) = self.niri.as_mut() else {
+            return;
+        };
+        if modal_open || (!force && !niri.tracking_due()) {
+            return;
+        }
+        match niri.geometry() {
+            Ok(Some(geometry)) if geometry.floating => {
+                self.config.niri.x = Some(geometry.x as f32);
+                self.config.niri.y = Some(geometry.y as f32);
+                self.config.niri.width = Some(geometry.width as f32);
+                self.config.niri.height = Some(geometry.height as f32);
+            }
+            Ok(_) => {}
+            Err(error) => log::debug!("could not track Niri geometry: {error}"),
+        }
     }
 
     fn backup_current_run(&mut self) {
@@ -1229,9 +1381,14 @@ impl RustSplitApp {
             self.config.window.width = Some(size.x);
             self.config.window.height = Some(size.y);
         }
-        if let Some(pos) = self.last_window_pos {
-            self.config.window.x = Some(pos.x);
-            self.config.window.y = Some(pos.y);
+        // Wayland clients cannot read their position and Niri tracks floating
+        // windows itself, so don't overwrite its saved geometry with egui's
+        // meaningless (0, 0) origin.
+        if self.niri.is_none() {
+            if let Some(pos) = self.last_window_pos {
+                self.config.window.x = Some(pos.x);
+                self.config.window.y = Some(pos.y);
+            }
         }
     }
 }
@@ -1241,6 +1398,7 @@ impl eframe::App for RustSplitApp {
         let ctx = ui.ctx().clone();
         self.poll_global_hotkeys();
         self.poll_server(&ctx);
+        self.poll_control(&ctx);
         self.handle_dropped_files(&ctx);
 
         let modal_open = self.run_editor.open
@@ -1252,6 +1410,7 @@ impl eframe::App for RustSplitApp {
             self.handle_local_shortcuts(&ctx);
         }
         self.apply_actions(&ctx);
+        self.poll_niri(&ctx);
 
         if self.any_modal_open() {
             self.ensure_dialog_space(&ctx);
@@ -1287,8 +1446,12 @@ impl eframe::App for RustSplitApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.track_niri_geometry(true);
         self.store_window_geometry();
         self.save_config();
+        if let Some(control) = self.control.take() {
+            control.stop();
+        }
         if self.config.general.autosave && self.timer.run.has_changed {
             if self.timer.run.file_path.is_some() {
                 let _ = self.save_current_run(true);
@@ -1331,6 +1494,23 @@ fn default_layout_name(layout: &Layout) -> String {
         .unwrap_or_else(|| "Layout".to_string())
 }
 
+/// The fallback size for the overlay, derived from the layout.
+fn computed_window_size(layout: &Layout, timer: &Timer) -> (f32, f32) {
+    let renderer = Renderer::default();
+    let natural_height = renderer.natural_height(layout, timer);
+    let natural_width = renderer.natural_width(layout, timer);
+    match layout.mode {
+        LayoutMode::Vertical => (
+            layout.vertical_width.max(200) as f32,
+            natural_height.max(80.0),
+        ),
+        LayoutMode::Horizontal => (
+            natural_width.max(200.0),
+            layout.horizontal_height.max(80) as f32,
+        ),
+    }
+}
+
 /// Build the initial eframe options from the layout and saved window geometry.
 pub fn native_options(
     layout: &Layout,
@@ -1339,26 +1519,27 @@ pub fn native_options(
 ) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("RustSplit")
+        .with_app_id(niri::APP_ID)
         .with_decorations(false)
         .with_transparent(true)
         .with_always_on_top()
         .with_min_inner_size(egui::vec2(80.0, 40.0))
         .with_resizable(layout.settings.allow_resizing);
 
-    let renderer = Renderer::default();
-    let natural_height = renderer.natural_height(layout, timer);
-    let natural_width = renderer.natural_width(layout, timer);
-    let width = config.window.width.unwrap_or(match layout.mode {
-        LayoutMode::Vertical => layout.vertical_width.max(200) as f32,
-        LayoutMode::Horizontal => natural_width.max(200.0),
-    });
-    let height = config.window.height.unwrap_or(match layout.mode {
-        LayoutMode::Vertical => natural_height.max(80.0),
-        LayoutMode::Horizontal => layout.horizontal_height.max(80) as f32,
-    });
+    let niri_active = config.niri.enabled && niri::is_session();
+    let (fallback_width, fallback_height) = computed_window_size(layout, timer);
+    let (saved_width, saved_height) = if niri_active {
+        (config.niri.width, config.niri.height)
+    } else {
+        (config.window.width, config.window.height)
+    };
+    let width = saved_width.unwrap_or(fallback_width);
+    let height = saved_height.unwrap_or(fallback_height);
     viewport = viewport.with_inner_size(egui::vec2(width, height));
-    if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
-        viewport = viewport.with_position(egui::pos2(x, y));
+    if !niri_active {
+        if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
+            viewport = viewport.with_position(egui::pos2(x, y));
+        }
     }
     if !layout.settings.always_on_top {
         viewport = viewport.with_window_level(WindowLevel::Normal);

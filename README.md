@@ -41,11 +41,15 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
   component settings, colors, fonts and global behavior.
 - **LiveSplit Server**: TCP remote control on port 16834 with the classic
   command set.
-- **Global hotkeys** (X11/Windows/macOS) and keyboard shortcuts.
+- **Global hotkeys** (X11/Windows/macOS) and compositor key bindings through
+  `rustsplit --command`.
+- **Niri integration**: detects a Niri session, floats the overlay through
+  Niri IPC and remembers its floating position and size.
 - **Transparent, borderless, always-on-top overlay**, dynamic scaling,
   opacity, click-through-while-running, drag and resize. Click-through is
-  only enabled when global hotkeys or the LiveSplit Server are active, so the
-  timer can still be controlled.
+  only enabled when global hotkeys, the LiveSplit Server or the local control
+  socket (used by compositor bindings) are active, so the timer can still be
+  controlled.
 - **Transparent configuration** in `settings.toml`, recent runs and layouts.
 
 ## Building
@@ -77,6 +81,7 @@ rustsplit                       # open the last run, or a blank run
 rustsplit --splits MyRun.lss    # open a split file
 rustsplit --layout MyLayout.lsl # open a layout
 rustsplit --server --port 16834 # start the remote-control server
+rustsplit --command startorsplit # control a running instance
 ```
 
 Right-click the timer for the main menu. The window is borderless by default:
@@ -104,8 +109,53 @@ resize, and use the context menu for everything else.
 
 Global hotkeys are disabled by default and can be configured under
 **Settings → Hotkeys** using names like `F1`, `control+KeyS` or
-`shift+alt+KeyR`. Global hotkeys use X11 on Linux; Wayland sessions need a
-compositor-supported global shortcut mechanism instead.
+`shift+alt+KeyR`. Global hotkeys use X11 on Linux. Wayland has no portable
+global-hotkey API, so compositor key bindings use the local control socket
+instead (see [Niri](#niri)).
+
+### Niri
+
+Niri is a scrollable tiling compositor, so RustSplit opens as a normal tiled
+window unless it is floated. When RustSplit detects a Niri session through
+`$NIRI_SOCKET`, it asks Niri to move its window to the floating layout and
+stores the floating position and size under `[niri]` in `settings.toml`.
+No window rule is required for this.
+
+Niri floating windows sit above tiled windows. For games, use borderless
+windowed mode if you need the overlay to stay visible over the game window.
+
+To avoid even a brief tiled frame on startup, float the window immediately
+with a Niri window rule. The Wayland application id is `rustsplit`:
+
+```kdl
+window-rule {
+    match app-id=r#"^rustsplit$"#
+    open-floating true
+}
+```
+
+Niri key bindings can drive the running instance over its control socket.
+The commands are the same as the LiveSplit Server commands, plus `editrun`,
+`editlayout` and `settings`:
+
+```kdl
+binds {
+    Mod+Space       { spawn "rustsplit" "--command" "startorsplit"; }
+    Mod+R           { spawn "rustsplit" "--command" "reset"; }
+    Mod+BackSpace   { spawn "rustsplit" "--command" "undosplit"; }
+    Mod+Delete      { spawn "rustsplit" "--command" "skipsplit"; }
+    Mod+P           { spawn "rustsplit" "--command" "togglepause"; }
+    Mod+Page_Down   { spawn "rustsplit" "--command" "switchcomparisonnext"; }
+    Mod+Page_Up     { spawn "rustsplit" "--command" "switchcomparisonprevious"; }
+    Mod+G           { spawn "rustsplit" "--command" "toggletimingmethod"; }
+    Mod+Shift+E     { spawn "rustsplit" "--command" "editrun"; }
+    Mod+Shift+L     { spawn "rustsplit" "--command" "editlayout"; }
+}
+```
+
+Replace the bindings with ones that do not conflict with your Niri config.
+The socket lives at `$XDG_RUNTIME_DIR/rustsplit/control.sock`;
+`RUSTSPLIT_CONTROL_SOCKET` can override the path for testing.
 
 ### Configuration
 

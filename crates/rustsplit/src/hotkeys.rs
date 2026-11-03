@@ -1,4 +1,7 @@
 //! Global hotkey registration.
+//!
+//! `global-hotkey` only supports X11 on Linux. On Wayland compositors use
+//! key bindings that call `rustsplit --command ...` instead; see `control.rs`.
 
 use std::collections::HashMap;
 

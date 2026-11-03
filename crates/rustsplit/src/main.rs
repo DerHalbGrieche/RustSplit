@@ -2,9 +2,11 @@
 
 mod app;
 mod config;
+mod control;
 mod file_dialog;
 mod hotkeys;
 mod layout_editor;
+mod niri;
 mod run_editor;
 
 use std::path::{Path, PathBuf};
@@ -37,11 +39,31 @@ struct Args {
     /// Port for the LiveSplit server
     #[arg(long = "port", value_name = "PORT")]
     port: Option<u16>,
+
+    /// Send a command to a running RustSplit instance (for compositor key
+    /// bindings)
+    #[arg(long = "command", value_name = "COMMAND")]
+    command: Option<String>,
 }
 
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+
+    if let Some(command) = args.command.as_deref() {
+        match control::send_command(command) {
+            Ok(response) => {
+                if !response.is_empty() {
+                    println!("{response}");
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let config_path = args.config.clone().unwrap_or_else(AppConfig::default_path);
     let mut config = AppConfig::load(&config_path);
