@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install windowing dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p rustsplit
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="rustsplit-${VERSION}-${{ matrix.name }}"
+          mkdir -p "dist/${NAME}"
+          cp "target/${{ matrix.target }}/release/rustsplit" "dist/${NAME}/"
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md "dist/${NAME}/"
+          cp crates/rustsplit/assets/rustsplit.desktop "dist/${NAME}/"
+          cp crates/rustsplit/assets/icon.png "dist/${NAME}/rustsplit.png"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $name = "rustsplit-$version-${{ matrix.name }}"
+          New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/rustsplit.exe" "dist/$name/"
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos:
+    name: Build macOS (universal)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-universal
+
+      - name: Build x86_64
+        run: cargo build --release --locked --target x86_64-apple-darwin -p rustsplit
+
+      - name: Build aarch64
+        run: cargo build --release --locked --target aarch64-apple-darwin -p rustsplit
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="rustsplit-${VERSION}-macos-universal"
+          mkdir -p "dist/${NAME}"
+          lipo -create \
+            -output "dist/${NAME}/rustsplit" \
+            "target/x86_64-apple-darwin/release/rustsplit" \
+            "target/aarch64-apple-darwin/release/rustsplit"
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md "dist/${NAME}/"
+          # Ad-hoc signature; macOS still requires notarization to avoid the
+          # Gatekeeper warning, which needs an Apple Developer certificate.
+          codesign --force --sign - "dist/${NAME}/rustsplit"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push'
+    needs:
+      - build
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tags must look like v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [[ "v${VERSION}" != "${GITHUB_REF_NAME}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match workspace version ${VERSION}"
+            exit 1
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: sha256sum -- * > SHA256SUMS.txt
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RustSplit ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*

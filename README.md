@@ -74,6 +74,21 @@ Run the tests with:
 cargo test
 ```
 
+### Releases
+
+Pushing a tag such as `v1.0.0` triggers the release workflow. It builds Linux
+(x86_64 and aarch64), Windows (x86_64) and a universal macOS binary, then
+publishes them with checksums on a GitHub release. The tag must match the
+workspace version in `Cargo.toml`:
+
+```bash
+git tag -a v1.0.0 -m "RustSplit 1.0.0"
+git push origin v1.0.0
+```
+
+The macOS binary is ad-hoc signed but not notarized, so Gatekeeper may require
+opening it manually the first time.
+
 ## Usage
 
 ```bash

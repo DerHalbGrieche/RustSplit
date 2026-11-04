@@ -1454,7 +1454,7 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
 name = "livesplit-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "chrono",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "livesplit-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "livesplit-core",
  "log",
@@ -1474,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "livesplit-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "egui",
@@ -2327,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "rustsplit"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "clap",
