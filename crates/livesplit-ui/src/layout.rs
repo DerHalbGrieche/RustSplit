@@ -157,6 +157,9 @@ pub struct LayoutSettings {
     pub background_image: Option<PathBuf>,
     pub image_opacity: f32,
     pub image_blur: f32,
+    /// RustSplit extension: hide the layout background and draw text with a
+    /// high-contrast outline so the timer stays readable over any background.
+    pub transparent_background: bool,
     pub timer_font: FontSpec,
     pub times_font: FontSpec,
     pub text_font: FontSpec,
@@ -193,6 +196,7 @@ impl Default for LayoutSettings {
             background_image: None,
             image_opacity: 1.0,
             image_blur: 0.0,
+            transparent_background: true,
             timer_font: FontSpec::timer(),
             times_font: FontSpec::times(),
             text_font: FontSpec::text(),
@@ -232,6 +236,7 @@ impl LayoutSettings {
             background_image: None,
             image_opacity: 1.0,
             image_blur: 0.0,
+            transparent_background: false,
             timer_font: FontSpec::timer(),
             times_font: FontSpec::times(),
             text_font: FontSpec::text(),
@@ -244,6 +249,19 @@ impl LayoutSettings {
             mouse_pass_through_while_running: false,
             allow_resizing: true,
             allow_moving: true,
+        }
+    }
+
+    /// Whether the layout paints any background at all.
+    pub fn has_background(&self) -> bool {
+        if self.background_image.is_some() {
+            return true;
+        }
+        match self.background_gradient {
+            GradientType::Plain | GradientType::PlainWithDeltaColor => {
+                self.background_color.a() > 0
+            }
+            _ => self.background_color.a() > 0 || self.background_color2.a() > 0,
         }
     }
 

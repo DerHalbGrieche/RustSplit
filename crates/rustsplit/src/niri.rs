@@ -202,6 +202,7 @@ pub struct NiriIntegration {
     window_id: Option<u64>,
     position_offset: Option<[f64; 2]>,
     last_requested_position: Option<[f64; 2]>,
+    last_synced_surface: Option<(f32, f32)>,
     applied: bool,
     gave_up: bool,
     started: Instant,
@@ -228,6 +229,7 @@ impl NiriIntegration {
             window_id: None,
             position_offset: None,
             last_requested_position: None,
+            last_synced_surface: None,
             applied: false,
             gave_up: false,
             started: Instant::now(),
@@ -346,11 +348,24 @@ impl NiriIntegration {
         self.applied && !self.gave_up && Instant::now() >= self.next_surface_sync
     }
 
-    /// Niri's visual size for the floating window.
+    /// Whether the client surface still needs to be resized for this Niri
+    /// tile size.
     ///
     /// Niri can resize a floating window without sending an xdg configure
     /// event, so the client surface needs to be resized to this size manually
-    /// or Niri will scale/letterbox the old surface.
+    /// or the OpenGL viewport keeps its old width and clips the overlay.
+    pub fn take_surface_sync(&mut self, width: f32, height: f32) -> bool {
+        let target = (width, height);
+        if self.last_synced_surface.is_some_and(|last| {
+            (last.0 - width).abs() < 1.0 && (last.1 - height).abs() < 1.0
+        }) {
+            return false;
+        }
+        self.last_synced_surface = Some(target);
+        true
+    }
+
+    /// Niri's visual size for the floating window.
     pub fn visual_size(&mut self) -> Result<Option<(f32, f32)>, String> {
         self.next_surface_sync = Instant::now() + Duration::from_millis(100);
         let Some(window) = self.find_window()? else {

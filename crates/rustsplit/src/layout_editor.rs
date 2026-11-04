@@ -386,6 +386,26 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
             ui.label("Text color");
             color_edit(ui, &mut settings.text_color);
             ui.end_row();
+            ui.label("Transparent background");
+            ui.horizontal(|ui| {
+                let changed = ui
+                    .checkbox(&mut settings.transparent_background, "")
+                    .changed();
+                ui.label(
+                    RichText::new("High-contrast text over any background")
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+                if changed
+                    && !settings.transparent_background
+                    && !settings.has_background()
+                {
+                    settings.background_color = egui::Color32::from_rgb(15, 15, 15);
+                    settings.background_color2 = egui::Color32::TRANSPARENT;
+                    settings.background_gradient = GradientType::Plain;
+                }
+            });
+            ui.end_row();
             ui.label("Background color");
             color_edit(ui, &mut settings.background_color);
             ui.end_row();

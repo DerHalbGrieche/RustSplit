@@ -92,6 +92,10 @@ fn assert_settings_fields_eq(actual: &LayoutSettings, expected: &LayoutSettings)
         "BackgroundImage"
     );
     assert_eq!(
+        actual.transparent_background, expected.transparent_background,
+        "TransparentBackground"
+    );
+    assert_eq!(
         actual.image_opacity, expected.image_opacity,
         "ImageOpacity"
     );
@@ -780,6 +784,40 @@ fn background_image_path_extension_roundtrips() {
         reparsed.settings.background_image.as_deref(),
         Some(std::path::Path::new("relative/background.png"))
     );
+}
+
+#[test]
+fn transparent_background_extension_roundtrips() {
+    let xml = r#"<Layout version="1.6.1">
+  <Settings>
+    <BackgroundColor>FF0F0F0F</BackgroundColor>
+    <BackgroundColor2>00000000</BackgroundColor2>
+    <BackgroundType>SolidColor</BackgroundType>
+    <TransparentBackground>True</TransparentBackground>
+  </Settings>
+  <Components />
+</Layout>"#;
+    let layout = parse_layout(xml.as_bytes()).expect("transparent layout must parse");
+    assert!(layout.settings.transparent_background);
+
+    let saved = layout_to_string(&layout).unwrap();
+    assert!(saved.contains("<TransparentBackground>True</TransparentBackground>"));
+    let reparsed = parse_layout(saved.as_bytes()).unwrap();
+    assert!(reparsed.settings.transparent_background);
+}
+
+#[test]
+fn transparent_layout_without_extension_is_detected() {
+    let xml = r#"<Layout version="1.6.1">
+  <Settings>
+    <BackgroundColor>000F0F0F</BackgroundColor>
+    <BackgroundColor2>00000000</BackgroundColor2>
+    <BackgroundType>SolidColor</BackgroundType>
+  </Settings>
+  <Components />
+</Layout>"#;
+    let layout = parse_layout(xml.as_bytes()).expect("transparent layout must parse");
+    assert!(layout.settings.transparent_background);
 }
 
 #[test]

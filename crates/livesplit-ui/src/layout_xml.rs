@@ -246,6 +246,13 @@ fn parse_layout_settings(
         .or_else(|| settings.background_image.clone());
     settings.image_opacity = parse_f32(value("ImageOpacity").as_deref(), settings.image_opacity);
     settings.image_blur = parse_f32(value("ImageBlur").as_deref(), settings.image_blur);
+    // RustSplit extension.  Older layouts without it are treated as
+    // transparent when they do not paint a background, so their text gets the
+    // high-contrast treatment automatically.
+    settings.transparent_background = parse_bool(
+        value("TransparentBackground").as_deref(),
+        !settings.has_background(),
+    );
     if let Some(font) = child(element, "TimerFont") {
         settings.timer_font = parse_font(font, &settings.timer_font);
     }
@@ -907,6 +914,12 @@ fn settings_to_xml(settings: &LayoutSettings) -> XmlElement {
     );
     add_bool(&mut element, "AntiAliasing", settings.anti_aliasing);
     add_bool(&mut element, "DropShadows", settings.drop_shadows);
+    // RustSplit extension; LiveSplit ignores unknown settings elements.
+    add_bool(
+        &mut element,
+        "TransparentBackground",
+        settings.transparent_background,
+    );
     add_text(
         &mut element,
         "BackgroundType",

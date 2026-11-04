@@ -8,10 +8,10 @@ use egui::{
 
 use livesplit_core::Timer;
 
-use crate::canvas::paint_gradient;
+use crate::canvas::paint_background;
 use crate::components::ComponentContext;
 use crate::icon::IconCache;
-use crate::layout::{Layout, LayoutMode, LayoutSettings};
+use crate::layout::{BackgroundStyle, Layout, LayoutMode, LayoutSettings};
 
 pub struct Renderer {
     pub icons: IconCache,
@@ -95,48 +95,30 @@ impl Renderer {
             return;
         }
 
-        let base_height = match layout.mode {
-            LayoutMode::Vertical => self.natural_height(layout, timer),
-            LayoutMode::Horizontal => (layout.horizontal_height.max(50) as f32).max(1.0),
+        // Match LiveSplit's scaling: a vertical layout scales with the window
+        // height, and a horizontal layout scales with the window width. The
+        // other axis simply fills the window, so resizing the width of a
+        // vertical layout does not change the text size.
+        let (scale, virtual_width, virtual_height) = match layout.mode {
+            LayoutMode::Vertical => {
+                let natural_height = self.natural_height(layout, timer).max(1.0);
+                let scale = (available.height() / natural_height).clamp(0.05, 16.0);
+                (
+                    scale,
+                    available.width() / scale,
+                    available.height() / scale,
+                )
+            }
+            LayoutMode::Horizontal => {
+                let natural_width = self.natural_width(layout, timer).max(1.0);
+                let scale = (available.width() / natural_width).clamp(0.05, 16.0);
+                (
+                    scale,
+                    available.width() / scale,
+                    available.height() / scale,
+                )
+            }
         };
-        let base_width = match layout.mode {
-            LayoutMode::Vertical => (layout.vertical_width.max(50) as f32).max(1.0),
-            LayoutMode::Horizontal => self.natural_width(layout, timer),
-        };
-
-        let scale = (available.width() / base_width)
-            .min(available.height() / base_height)
-            .clamp(0.05, 16.0);
-
-        // Scale uniformly, then expand the virtual layout to the window's
-        // aspect ratio. Flexible components absorb the extra space, so the
-        // overlay fills the window without stretching text or leaving black
-        // bars when the user resizes it freely.
-        let virtual_width = (available.width() / scale).max(base_width);
-        let virtual_height = (available.height() / scale).max(base_height);
-        let extra_width = (virtual_width - base_width).max(0.0);
-        let extra_height = (virtual_height - base_height).max(0.0);
-        let flexible = layout
-            .components
-            .iter()
-            .position(|component| component.component.is_flexible())
-            .or_else(|| {
-                layout.components.iter().rposition(|component| match layout.mode {
-                    LayoutMode::Vertical => {
-                        component.component.natural_height(timer, 1.0) > 0.0
-                    }
-                    LayoutMode::Horizontal => {
-                        component.component.natural_width(timer, 1.0) > 0.0
-                    }
-                })
-            });
-
-        let mut root = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(available)
-                .layout(egui::Layout::top_down(egui::Align::Min)),
-        );
-        root.set_opacity(layout.settings.opacity.clamp(0.0, 1.0));
 
         // Draw in unscaled layout coordinates and apply one visual transform.
         // This keeps component code simple and produces LiveSplit-style
@@ -147,13 +129,37 @@ impl Renderer {
             egui::vec2(virtual_width, virtual_height),
         );
 
-        if let Some(path) = &layout.settings.background_image {
-            self.ensure_background(ui.ctx(), path);
+        let transparent =
+            layout.settings.transparent_background || !layout.settings.has_background();
+        let mut render_theme = layout.settings.clone();
+        if transparent {
+            apply_readable_text_theme(&mut render_theme);
         }
-        let background_texture = self
-            .background
-            .as_ref()
-            .map(|(_, texture)| (texture.id(), texture.size_vec2()));
+
+        let mut root = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(available)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        root.set_opacity(layout.settings.opacity.clamp(0.0, 1.0));
+        // The shapes below are drawn in virtual layout coordinates, so the
+        // clip rect must use the same coordinate space. `with_visual_transform`
+        // scales both the shapes and their clip rects; leaving the screen-sized
+        // clip rect here would shrink the clip to `window * scale`.
+        root.set_clip_rect(virtual_rect);
+
+        if !transparent {
+            if let Some(path) = &layout.settings.background_image {
+                self.ensure_background(ui.ctx(), path);
+            }
+        }
+        let background_texture = if transparent {
+            None
+        } else {
+            self.background
+                .as_ref()
+                .map(|(_, texture)| (texture.id(), texture.size_vec2()))
+        };
         let image_opacity = layout.settings.image_opacity.clamp(0.0, 1.0);
         let icons = &mut self.icons;
         let last_rects = &mut self.last_component_rects;
@@ -173,17 +179,16 @@ impl Renderer {
                 );
             }
 
-            // Layout background.
-            if layout.settings.background_color.a() > 0
-                || layout.settings.background_color2.a() > 0
-            {
-                paint_gradient(
-                    ui.painter(),
-                    virtual_rect,
-                    layout.settings.background_color,
-                    layout.settings.background_color2,
-                    layout.settings.background_gradient.is_horizontal(),
-                );
+            // Layout background. Use the shared background painter so a
+            // "Plain" background is a solid color; interpolating to the
+            // second color would make opaque LiveSplit layouts fade out.
+            if !transparent {
+                let background = BackgroundStyle {
+                    color: layout.settings.background_color,
+                    color2: layout.settings.background_color2,
+                    gradient: layout.settings.background_gradient,
+                };
+                paint_background(ui.painter(), virtual_rect, &background);
             }
 
             last_rects.clear();
@@ -191,16 +196,11 @@ impl Renderer {
             match layout.mode {
                 LayoutMode::Vertical => {
                     let mut y = 0.0;
-                    let mut remaining_extra = extra_height;
-                    for (index, component) in layout.components.iter().enumerate() {
-                        let mut height = component.component.natural_height(timer, 1.0);
+                    for component in &layout.components {
+                        let height = component.component.natural_height(timer, 1.0);
                         if height <= 0.0 {
                             last_rects.push(Rect::NOTHING);
                             continue;
-                        }
-                        if flexible == Some(index) {
-                            height += remaining_extra;
-                            remaining_extra = 0.0;
                         }
                         let rect = Rect::from_min_size(
                             egui::pos2(0.0, y),
@@ -212,7 +212,7 @@ impl Renderer {
                         ));
                         let mut overridden_theme;
                         let theme = if component.font_overrides.has_overrides() {
-                            overridden_theme = layout.settings.clone();
+                            overridden_theme = render_theme.clone();
                             let overrides = &component.font_overrides;
                             if overrides.override_timer_font {
                                 overridden_theme.timer_font = overrides.timer_font.clone();
@@ -225,7 +225,7 @@ impl Renderer {
                             }
                             &overridden_theme
                         } else {
-                            &layout.settings
+                            &render_theme
                         };
                         let mut ctx = ComponentContext::new(timer, theme, icons, 1.0);
                         component.component.draw(ui, rect, &mut ctx);
@@ -234,16 +234,11 @@ impl Renderer {
                 }
                 LayoutMode::Horizontal => {
                     let mut x = 0.0;
-                    let mut remaining_extra = extra_width;
-                    for (index, component) in layout.components.iter().enumerate() {
-                        let mut width = component.component.natural_width(timer, 1.0);
+                    for component in &layout.components {
+                        let width = component.component.natural_width(timer, 1.0);
                         if width <= 0.0 {
                             last_rects.push(Rect::NOTHING);
                             continue;
-                        }
-                        if flexible == Some(index) {
-                            width += remaining_extra;
-                            remaining_extra = 0.0;
                         }
                         let rect = Rect::from_min_size(
                             egui::pos2(x, 0.0),
@@ -255,7 +250,7 @@ impl Renderer {
                         ));
                         let mut overridden_theme;
                         let theme = if component.font_overrides.has_overrides() {
-                            overridden_theme = layout.settings.clone();
+                            overridden_theme = render_theme.clone();
                             let overrides = &component.font_overrides;
                             if overrides.override_timer_font {
                                 overridden_theme.timer_font = overrides.timer_font.clone();
@@ -268,7 +263,7 @@ impl Renderer {
                             }
                             &overridden_theme
                         } else {
-                            &layout.settings
+                            &render_theme
                         };
                         let mut ctx = ComponentContext::new(timer, theme, icons, 1.0);
                         component.component.draw(ui, rect, &mut ctx);
@@ -280,6 +275,25 @@ impl Renderer {
     }
 }
 
+/// Make text legible over an arbitrary background without painting a
+/// background of our own. White or colored text gets a dark outline; very dark
+/// text gets a light outline.
+fn apply_readable_text_theme(theme: &mut LayoutSettings) {
+    if theme.text_outline_color.a() == 0 {
+        let [r, g, b, _] = theme.text_color.to_srgba_unmultiplied();
+        let luminance = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+        theme.text_outline_color = if luminance < 96.0 {
+            egui::Color32::from_white_alpha(220)
+        } else {
+            egui::Color32::from_black_alpha(220)
+        };
+    }
+    if theme.shadows_color.a() == 0 {
+        theme.shadows_color = egui::Color32::from_black_alpha(180);
+    }
+    theme.drop_shadows = true;
+}
+
 /// Layout settings used when the application is in an overlay-only mode.
 pub fn transparent_theme() -> LayoutSettings {
     LayoutSettings::default()
@@ -288,4 +302,140 @@ pub fn transparent_theme() -> LayoutSettings {
 /// Helper for previews in the layout editor.
 pub fn preview_layout_height(layout: &Layout, timer: &Timer, renderer: &Renderer) -> f32 {
     renderer.natural_height(layout, timer).max(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{pos2, vec2, Context, RawInput, Rect};
+    use livesplit_core::{Run, Timer};
+
+    use crate::layout::GradientType;
+
+    fn render(
+        layout: &Layout,
+        timer: &Timer,
+        size: egui::Vec2,
+    ) -> (Vec<Rect>, Vec<(Rect, egui::Shape)>) {
+        let ctx = Context::default();
+        let mut renderer = Renderer::default();
+        let mut output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)),
+                ..Default::default()
+            },
+            |ui| renderer.draw(ui, layout, timer),
+        );
+        output.textures_delta.clear();
+        let shapes = output
+            .shapes
+            .into_iter()
+            .map(|shape| (shape.clip_rect, shape.shape))
+            .collect();
+        (renderer.last_component_rects.clone(), shapes)
+    }
+
+    fn timer() -> Timer {
+        Timer::with_system_clock(Run::with_segments("", "", ["One", "Two", "Three"]))
+    }
+
+    #[test]
+    fn vertical_layout_scales_with_height_and_fills_width() {
+        let layout = Layout::parse_default().unwrap();
+        let timer = timer();
+        let (narrow, _) = render(&layout, &timer, vec2(300.0, 500.0));
+        let (wide, _) = render(&layout, &timer, vec2(600.0, 500.0));
+
+        assert_eq!(narrow.len(), wide.len());
+        for (narrow, wide) in narrow.iter().zip(&wide) {
+            assert!((narrow.height() - wide.height()).abs() < 0.01);
+            assert!((narrow.min.y - wide.min.y).abs() < 0.01);
+            assert!((wide.width() - 2.0 * narrow.width()).abs() < 0.5);
+        }
+    }
+
+    #[test]
+    fn horizontal_layout_scales_with_width_and_fills_height() {
+        let mut layout = Layout::parse_default().unwrap();
+        layout.mode = LayoutMode::Horizontal;
+        let timer = timer();
+        let (short, _) = render(&layout, &timer, vec2(600.0, 300.0));
+        let (tall, _) = render(&layout, &timer, vec2(600.0, 600.0));
+
+        assert_eq!(short.len(), tall.len());
+        for (short, tall) in short.iter().zip(&tall) {
+            assert!((short.width() - tall.width()).abs() < 0.01);
+            assert!((short.min.x - tall.min.x).abs() < 0.01);
+            assert!((tall.height() - 2.0 * short.height()).abs() < 0.5);
+        }
+    }
+
+    #[test]
+    fn plain_layout_background_is_solid() {
+        let mut layout = Layout::default();
+        layout.settings.background_color = egui::Color32::from_rgb(15, 15, 15);
+        layout.settings.background_color2 = egui::Color32::TRANSPARENT;
+        layout.settings.background_gradient = GradientType::Plain;
+        layout.settings.transparent_background = false;
+        let timer = timer();
+        let (_, shapes) = render(&layout, &timer, vec2(300.0, 500.0));
+
+        let background = shapes.iter().find_map(|(_, shape)| match shape {
+            egui::Shape::Rect(rect) if rect.fill == layout.settings.background_color => {
+                Some(rect.rect)
+            }
+            _ => None,
+        });
+        let background = background.expect("plain background should be drawn as a solid rect");
+        assert_eq!(background.size(), vec2(300.0, 500.0));
+    }
+
+    #[test]
+    fn transparent_mode_hides_the_layout_background() {
+        let mut layout = Layout::parse_default().unwrap();
+        layout.settings.transparent_background = true;
+        let timer = timer();
+        let (_, shapes) = render(&layout, &timer, vec2(286.0, 519.0));
+
+        assert!(!shapes.iter().any(|(_, shape)| {
+            matches!(
+                shape,
+                egui::Shape::Rect(rect) if rect.fill == layout.settings.background_color
+            )
+        }));
+    }
+
+    #[test]
+    fn transparent_mode_adds_readable_text_contrast() {
+        let mut settings = LayoutSettings::default();
+        settings.text_outline_color = egui::Color32::TRANSPARENT;
+        settings.shadows_color = egui::Color32::TRANSPARENT;
+        settings.drop_shadows = false;
+
+        apply_readable_text_theme(&mut settings);
+
+        assert!(settings.text_outline_color.a() > 0);
+        assert!(settings.shadows_color.a() > 0);
+        assert!(settings.drop_shadows);
+    }
+
+    #[test]
+    fn scaled_layout_is_not_clipped_to_the_unscaled_window_rect() {
+        let layout = Layout::parse_default().unwrap();
+        let timer = timer();
+        let size = vec2(286.0, 519.0);
+        let (_, shapes) = render(&layout, &timer, size);
+
+        let (clip_rect, _) = shapes
+            .iter()
+            .find(|(_, shape)| {
+                matches!(
+                    shape,
+                    egui::Shape::Rect(rect) if rect.fill == layout.settings.background_color
+                )
+            })
+            .expect("the layout background should be drawn");
+
+        assert_eq!(clip_rect.size(), size);
+    }
 }

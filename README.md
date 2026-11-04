@@ -46,7 +46,9 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
 - **Niri integration**: detects a Niri session, floats the overlay through
   Niri IPC and remembers its floating position and size.
 - **Transparent, borderless, always-on-top overlay**, dynamic scaling,
-  opacity, click-through-while-running, drag and resize. Click-through is
+  opacity, click-through-while-running, drag and resize. Transparency is
+  optional per layout; transparent mode adds a high-contrast text outline and
+  shadow so the timer stays readable over any background. Click-through is
   only enabled when global hotkeys, the LiveSplit Server or the local control
   socket (used by compositor bindings) are active, so the timer can still be
   controlled.

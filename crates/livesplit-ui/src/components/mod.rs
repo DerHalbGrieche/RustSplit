@@ -302,12 +302,6 @@ impl Component {
         }
     }
 
-    /// Components that can absorb extra space when the overlay is resized to
-    /// an aspect ratio that does not match the layout's natural size.
-    pub fn is_flexible(&self) -> bool {
-        matches!(self, Self::Splits(_) | Self::Subsplits(_))
-    }
-
     pub fn natural_height(&self, timer: &Timer, scale: f32) -> f32 {
         let scale = scale.max(0.1);
         match self {

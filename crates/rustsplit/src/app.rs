@@ -1366,13 +1366,9 @@ impl RustSplitApp {
         }
         match niri.visual_size() {
             Ok(Some((width, height))) => {
-                let target = egui::vec2(width, height);
-                if self
-                    .last_window_size
-                    .is_none_or(|size| (size - target).length_sq() > 4.0)
-                {
+                if niri.take_surface_sync(width, height) {
                     log::debug!("Niri: resizing client surface to {width}x{height}");
-                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(target));
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width, height)));
                 }
             }
             Ok(None) => {}
@@ -1562,19 +1558,30 @@ fn default_layout_name(layout: &Layout) -> String {
         .unwrap_or_else(|| "Layout".to_string())
 }
 
-/// The fallback size for the overlay, derived from the layout.
+/// The initial size for the overlay.
+///
+/// LiveSplit stores the window size in the layout, so use those values when
+/// they are present. Fall back to the components' natural size for layouts
+/// that leave an axis at -1.
 fn computed_window_size(layout: &Layout, timer: &Timer) -> (f32, f32) {
     let renderer = Renderer::default();
     let natural_height = renderer.natural_height(layout, timer);
     let natural_width = renderer.natural_width(layout, timer);
+    let dimension = |stored: i32, natural: f32, minimum: f32| {
+        if stored > 0 {
+            (stored as f32).max(minimum)
+        } else {
+            natural.max(minimum)
+        }
+    };
     match layout.mode {
         LayoutMode::Vertical => (
-            layout.vertical_width.max(200) as f32,
-            natural_height.max(80.0),
+            dimension(layout.vertical_width, natural_width, 200.0),
+            dimension(layout.vertical_height, natural_height, 80.0),
         ),
         LayoutMode::Horizontal => (
-            natural_width.max(200.0),
-            layout.horizontal_height.max(80) as f32,
+            dimension(layout.horizontal_width, natural_width, 200.0),
+            dimension(layout.horizontal_height, natural_height, 80.0),
         ),
     }
 }
