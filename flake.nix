@@ -18,6 +18,7 @@
 
       runtimeDeps =
         pkgs: with pkgs; [
+          alsa-lib
           libGL
           libx11
           libxcb

@@ -395,10 +395,12 @@ mod tests {
 
     #[test]
     fn transparent_mode_adds_readable_text_contrast() {
-        let mut settings = LayoutSettings::default();
-        settings.text_outline_color = egui::Color32::TRANSPARENT;
-        settings.shadows_color = egui::Color32::TRANSPARENT;
-        settings.drop_shadows = false;
+        let mut settings = LayoutSettings {
+            text_outline_color: egui::Color32::TRANSPARENT,
+            shadows_color: egui::Color32::TRANSPARENT,
+            drop_shadows: false,
+            ..LayoutSettings::default()
+        };
 
         apply_readable_text_theme(&mut settings);
 
