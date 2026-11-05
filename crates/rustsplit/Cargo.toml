@@ -11,6 +11,12 @@ default-run = "rustsplit"
 name = "rustsplit"
 path = "src/main.rs"
 
+[features]
+default = ["native-dialogs"]
+# Use the platform's file dialogs (XDG desktop portal on Linux), falling back
+# to the built-in egui browser when they are unavailable.
+native-dialogs = ["dep:rfd", "dep:pollster"]
+
 [dependencies]
 rustsplit-core.workspace = true
 rustsplit-ui.workspace = true
@@ -25,6 +31,8 @@ env_logger.workspace = true
 global-hotkey.workspace = true
 image.workspace = true
 log.workspace = true
+pollster = { workspace = true, optional = true }
+rfd = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

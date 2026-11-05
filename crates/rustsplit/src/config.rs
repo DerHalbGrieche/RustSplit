@@ -16,7 +16,6 @@ pub struct AppConfig {
     pub niri: NiriConfig,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
@@ -25,6 +24,9 @@ pub struct GeneralConfig {
     pub recent_runs: Vec<PathBuf>,
     pub autosave: bool,
     pub autosave_layout: bool,
+    /// Use the platform's file dialogs (the XDG desktop portal on Linux)
+    /// instead of the built-in browser when they are available.
+    pub use_system_file_dialogs: bool,
 }
 
 impl Default for GeneralConfig {
@@ -35,6 +37,7 @@ impl Default for GeneralConfig {
             recent_runs: Vec::new(),
             autosave: true,
             autosave_layout: true,
+            use_system_file_dialogs: true,
         }
     }
 }
@@ -56,7 +59,6 @@ pub struct HotkeyConfig {
     pub edit_run: String,
     pub edit_layout: String,
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -87,7 +89,6 @@ pub struct WindowConfig {
     pub x: Option<f32>,
     pub y: Option<f32>,
 }
-
 
 /// Niri-specific overlay geometry.
 ///
@@ -196,5 +197,17 @@ mod tests {
         assert!(!loaded.niri.auto_float);
         assert_eq!(loaded.niri.x, Some(42.0));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn system_file_dialogs_default_on_and_roundtrip() {
+        let old: AppConfig = toml::from_str("[general]\nautosave = false\n").unwrap();
+        assert!(old.general.use_system_file_dialogs);
+        let mut config = AppConfig::default();
+        config.general.use_system_file_dialogs = false;
+        let data = toml::to_string_pretty(&config).unwrap();
+        assert!(data.contains("use_system_file_dialogs = false"));
+        let loaded: AppConfig = toml::from_str(&data).unwrap();
+        assert!(!loaded.general.use_system_file_dialogs);
     }
 }

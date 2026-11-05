@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod control;
 mod file_dialog;
+mod file_dialogs;
 mod hotkeys;
 mod layout_editor;
 mod niri;

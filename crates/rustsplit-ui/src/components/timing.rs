@@ -604,11 +604,11 @@ fn possible_time_save_for_segment(
         }
         index -= 1;
         best_segments += timer
-                .run
-                .segments
-                .get(index as usize)?
-                .best_segment_time
-                .get(method)?;
+            .run
+            .segments
+            .get(index as usize)?
+            .best_segment_time
+            .get(method)?;
     }
 
     let comparison_time = timer

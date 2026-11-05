@@ -18,6 +18,8 @@
 
       runtimeDeps =
         pkgs: with pkgs; [
+          # dlopened by rfd to reach the XDG file chooser portal.
+          dbus
           libGL
           libx11
           libxcb

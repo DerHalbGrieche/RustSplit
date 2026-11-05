@@ -36,6 +36,32 @@ struct Entry {
     is_dir: bool,
 }
 
+/// The directory a dialog starts in: `start` itself when it is a directory,
+/// otherwise its parent, falling back to the working directory.
+pub fn start_directory(start: Option<&Path>) -> PathBuf {
+    start
+        .map(|path| {
+            if path.is_dir() {
+                path.to_path_buf()
+            } else {
+                path.parent().unwrap_or(Path::new(".")).to_path_buf()
+            }
+        })
+        .filter(|path| path.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Append the first allowed extension to a save path that has none.
+pub fn with_default_extension(mut path: PathBuf, extensions: &[String]) -> PathBuf {
+    if path.extension().is_none() {
+        if let Some(extension) = extensions.first() {
+            path.set_extension(extension);
+        }
+    }
+    path
+}
+
 impl Default for FileDialog {
     fn default() -> Self {
         Self {
@@ -68,17 +94,7 @@ impl FileDialog {
             .iter()
             .map(|extension| extension.to_string())
             .collect();
-        self.directory = start
-            .map(|path| {
-                if path.is_dir() {
-                    path.to_path_buf()
-                } else {
-                    path.parent().unwrap_or(Path::new(".")).to_path_buf()
-                }
-            })
-            .filter(|path| path.is_dir())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        self.directory = start_directory(start);
         self.refresh();
     }
 
@@ -137,13 +153,11 @@ impl FileDialog {
         if path.is_absolute() {
             return Some(path.to_path_buf());
         }
-        let mut path = self.directory.join(path);
-        if self.mode == FileDialogMode::Save && path.extension().is_none() {
-            if let Some(extension) = self.extensions.first() {
-                path.set_extension(extension);
-            }
-        }
-        Some(path)
+        let path = self.directory.join(path);
+        Some(match self.mode {
+            FileDialogMode::Save => with_default_extension(path, &self.extensions),
+            FileDialogMode::Open => path,
+        })
     }
 
     /// Show the dialog and return an action when the user confirms/cancels.
