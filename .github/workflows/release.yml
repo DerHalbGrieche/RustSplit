@@ -176,11 +176,26 @@ jobs:
         working-directory: artifacts
         run: sha256sum -- * > SHA256SUMS.txt
 
+      - name: Extract release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v heading="## ${VERSION}" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [[ ! -s RELEASE_NOTES.md ]]; then
+            echo "::warning::CHANGELOG.md has no section for ${VERSION}"
+          fi
+
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: RustSplit ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
