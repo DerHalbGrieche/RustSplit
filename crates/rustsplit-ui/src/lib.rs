@@ -63,18 +63,27 @@ pub fn configure_fonts(ctx: &egui::Context) {
         Arc::new(FontData::from_static(FONT_MONO_BOLD)),
     );
 
-    fonts.families.insert(
-        FontFamily::Name(Arc::from(TEXT_FAMILY)),
-        vec!["ls_text".to_string(), "Ubuntu-Light".to_string()],
-    );
+    // egui's own fonts are fallbacks only. They exist only when egui's
+    // `default_fonts` feature is on, and naming a missing font panics.
+    let with_fallback = |primary: &str, fallback: &str| {
+        let mut family = vec![primary.to_string()];
+        if fonts.font_data.contains_key(fallback) {
+            family.push(fallback.to_string());
+        }
+        family
+    };
+    let text_family = with_fallback("ls_text", "Ubuntu-Light");
+    let timer_family = with_fallback("ls_mono", "Hack");
+    fonts
+        .families
+        .insert(FontFamily::Name(Arc::from(TEXT_FAMILY)), text_family);
     fonts.families.insert(
         FontFamily::Name(Arc::from(BOLD_FAMILY)),
         vec!["ls_bold".to_string(), "ls_text".to_string()],
     );
-    fonts.families.insert(
-        FontFamily::Name(Arc::from(TIMER_FAMILY)),
-        vec!["ls_mono".to_string(), "Hack".to_string()],
-    );
+    fonts
+        .families
+        .insert(FontFamily::Name(Arc::from(TIMER_FAMILY)), timer_family);
     fonts.families.insert(
         FontFamily::Name(Arc::from(TIMER_BOLD_FAMILY)),
         vec!["ls_mono_bold".to_string(), "ls_mono".to_string()],

@@ -248,7 +248,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a tour of the data flow.
   paths) return safe no-op responses. `switchsplits` and `switchlayout` are
   handled by the application.
 - Background images are supported from local files and from LiveSplit layouts
-  that embed an image. Image blur is stored but not applied by the renderer.
+  that embed an image. Image blur uses LiveSplit's 0..1 scale relative to
+  the image size and is applied once when the image or the blur changes.
 
 ## Credits
 

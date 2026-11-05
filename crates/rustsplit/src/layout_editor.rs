@@ -425,7 +425,8 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
             ui.label("Image opacity / blur");
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(&mut settings.image_opacity, 0.0..=1.0));
-                ui.add(egui::Slider::new(&mut settings.image_blur, 0.0..=20.0));
+                // LiveSplit's blur is a 0..1 fraction of the image size.
+                ui.add(egui::Slider::new(&mut settings.image_blur, 0.0..=1.0));
             });
             ui.end_row();
             ui.label("Opacity");

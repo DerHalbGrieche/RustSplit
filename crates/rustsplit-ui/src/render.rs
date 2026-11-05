@@ -1,8 +1,11 @@
 //! Draws a complete layout.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use egui::{emath::TSTransform, ColorImage, Rect, TextureHandle, TextureOptions, Ui};
+use egui::{
+    emath::TSTransform, ColorImage, Rect, TextureHandle, TextureId, TextureOptions, Ui, Vec2,
+};
+use image::RgbaImage;
 
 use rustsplit_core::Timer;
 
@@ -16,7 +19,19 @@ pub struct Renderer {
     /// Last rectangle used for each component, in screen coordinates.  Useful
     /// for editors and debugging.
     pub last_component_rects: Vec<Rect>,
-    background: Option<(PathBuf, TextureHandle)>,
+    background: Option<Background>,
+}
+
+/// The decoded layout background image and its blurred texture.
+struct Background {
+    path: PathBuf,
+    /// Decoded source pixels, kept so a blur change does not read and decode
+    /// the file again. `None` when the image could not be loaded, which also
+    /// stops a broken path from being retried every frame.
+    source: Option<RgbaImage>,
+    /// The blur baked into `texture`.
+    blur: f32,
+    texture: Option<TextureHandle>,
 }
 
 impl Default for Renderer {
@@ -48,43 +63,44 @@ impl Renderer {
             .max(1.0)
     }
 
-    fn ensure_background(&mut self, ctx: &egui::Context, path: &PathBuf) {
+    /// Load the background texture, decoding only when the path changes and
+    /// blurring only when the path or the blur setting changes. Returns the
+    /// texture and the source image size; the size is used for the aspect
+    /// ratio because large blurs are baked into a downscaled texture.
+    fn ensure_background(
+        &mut self,
+        ctx: &egui::Context,
+        path: &PathBuf,
+        blur: f32,
+    ) -> Option<(TextureId, Vec2)> {
+        let blur = effective_blur(blur);
         if self
             .background
             .as_ref()
-            .is_some_and(|(current, _)| current == path)
+            .is_none_or(|background| background.path != *path)
         {
-            return;
+            self.background = Some(Background {
+                path: path.clone(),
+                source: decode_background(path),
+                blur,
+                texture: None,
+            });
         }
-        self.background = None;
-        let path_text = path.to_string_lossy();
-        let bytes = if let Some(encoded) = path_text.strip_prefix("livesplit-embedded-image:") {
-            use base64::Engine;
-            match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
-                Ok(bytes) => bytes,
-                Err(_) => return,
-            }
-        } else {
-            match std::fs::read(path) {
-                Ok(bytes) => bytes,
-                Err(_) => return,
-            }
-        };
-        let Ok(image) = image::load_from_memory(&bytes) else {
-            return;
-        };
-        let rgba = image.to_rgba8();
-        let size = [rgba.width() as usize, rgba.height() as usize];
-        if size[0] == 0 || size[1] == 0 {
-            return;
+        let background = self.background.as_mut()?;
+        let source = background.source.as_ref()?;
+        if background.texture.is_none() || background.blur != blur {
+            background.blur = blur;
+            background.texture = Some(ctx.load_texture(
+                "rustsplit-background",
+                background_pixels(source, blur),
+                TextureOptions::LINEAR,
+            ));
         }
-        let color_image = ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
-        let texture = ctx.load_texture(
-            format!("rustsplit-background-{}", path.display()),
-            color_image,
-            TextureOptions::LINEAR,
-        );
-        self.background = Some((path.clone(), texture));
+        let size = egui::vec2(source.width() as f32, source.height() as f32);
+        background
+            .texture
+            .as_ref()
+            .map(|texture| (texture.id(), size))
     }
 
     pub fn draw(&mut self, ui: &mut Ui, layout: &Layout, timer: &Timer) {
@@ -136,17 +152,11 @@ impl Renderer {
         // clip rect here would shrink the clip to `window * scale`.
         root.set_clip_rect(virtual_rect);
 
-        if !transparent {
-            if let Some(path) = &layout.settings.background_image {
-                self.ensure_background(ui.ctx(), path);
+        let background_texture = match &layout.settings.background_image {
+            Some(path) if !transparent => {
+                self.ensure_background(ui.ctx(), path, layout.settings.image_blur)
             }
-        }
-        let background_texture = if transparent {
-            None
-        } else {
-            self.background
-                .as_ref()
-                .map(|(_, texture)| (texture.id(), texture.size_vec2()))
+            _ => None,
         };
         let image_opacity = layout.settings.image_opacity.clamp(0.0, 1.0);
         let icons = &mut self.icons;
@@ -261,6 +271,86 @@ impl Renderer {
             }
         });
     }
+}
+
+/// LiveSplit stores `ImageBlur` as a fraction from 0 to 1 (`.lsl` files and
+/// livesplit-core use the same range). As in livesplit-core the blur is
+/// relative to the image, so it looks the same at any resolution:
+/// `sigma = BLUR_FACTOR * blur * max(width, height)` pixels of gaussian blur.
+/// Values outside 0..1 are clamped.
+const BLUR_FACTOR: f32 = 0.05;
+
+/// Blurs wider than this sigma (in pixels) are computed on a downscaled copy.
+/// A blurred image has no detail left at that scale, so the linear texture
+/// filter upscales it without visible loss, and the work stays bounded: the
+/// long side is at most `MAX_BLUR_SIGMA / (BLUR_FACTOR * blur)` pixels.
+const MAX_BLUR_SIGMA: f32 = 4.0;
+
+/// Upper bound for the long side of a blurred texture, so small blurs on very
+/// large images do not blur tens of megapixels.
+const MAX_BLURRED_SIZE: f32 = 2048.0;
+
+/// The stored blur clamped to LiveSplit's range. NaN counts as no blur.
+fn effective_blur(blur: f32) -> f32 {
+    if blur > 0.0 {
+        blur.min(1.0)
+    } else {
+        0.0
+    }
+}
+
+fn decode_background(path: &Path) -> Option<RgbaImage> {
+    let path_text = path.to_string_lossy();
+    let bytes = if let Some(encoded) = path_text.strip_prefix("livesplit-embedded-image:") {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded.trim())
+            .ok()?
+    } else {
+        std::fs::read(path).ok()?
+    };
+    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    (image.width() > 0 && image.height() > 0).then_some(image)
+}
+
+/// Build the background texture pixels with the blur applied. This runs once
+/// per image or blur change, never per frame.
+fn background_pixels(source: &RgbaImage, blur: f32) -> ColorImage {
+    let (width, height) = source.dimensions();
+    let longest = width.max(height) as f32;
+    let sigma = BLUR_FACTOR * effective_blur(blur) * longest;
+    // Sub-pixel blurs are invisible; skip the work.
+    if sigma < 0.5 {
+        return ColorImage::from_rgba_unmultiplied(
+            [width as usize, height as usize],
+            source.as_raw(),
+        );
+    }
+
+    let scale = (MAX_BLUR_SIGMA / sigma)
+        .min(MAX_BLURRED_SIZE / longest)
+        .min(1.0);
+    let mut working = if scale < 1.0 {
+        let scaled = |side: u32| ((side as f32 * scale).round() as u32).max(1);
+        image::imageops::thumbnail(source, scaled(width), scaled(height))
+    } else {
+        source.clone()
+    };
+    // `fast_blur` expects premultiplied alpha; without it fully transparent
+    // pixels would bleed their arbitrary color into the visible ones.
+    for pixel in working.pixels_mut() {
+        let alpha = pixel[3] as u32;
+        for channel in &mut pixel.0[..3] {
+            *channel = ((*channel as u32 * alpha + 127) / 255) as u8;
+        }
+    }
+    // Three box blur passes approximate a gaussian in O(pixels), independent
+    // of the radius.
+    let blurred = image::imageops::fast_blur(&working, sigma * scale);
+    ColorImage::from_rgba_premultiplied(
+        [blurred.width() as usize, blurred.height() as usize],
+        blurred.as_raw(),
+    )
 }
 
 /// Make text legible over an arbitrary background without painting a
@@ -427,5 +517,127 @@ mod tests {
             .expect("the layout background should be drawn");
 
         assert_eq!(clip_rect.size(), size);
+    }
+
+    /// A black image with a one pixel white vertical line in the middle.
+    fn line_image(size: u32) -> RgbaImage {
+        RgbaImage::from_fn(size, size, |x, _| {
+            if x == size / 2 {
+                image::Rgba([255, 255, 255, 255])
+            } else {
+                image::Rgba([0, 0, 0, 255])
+            }
+        })
+    }
+
+    fn red_at(image: &ColorImage, x: usize, y: usize) -> u8 {
+        image.pixels[y * image.size[0] + x].r()
+    }
+
+    #[test]
+    fn zero_blur_keeps_the_image_unchanged() {
+        let source = RgbaImage::from_fn(8, 4, |x, y| {
+            image::Rgba([x as u8 * 30, y as u8 * 60, 7, 255])
+        });
+        for blur in [0.0, -1.0, f32::NAN] {
+            let pixels = background_pixels(&source, blur);
+            assert_eq!(pixels.size, [8, 4]);
+            assert_eq!(pixels.pixels[9], egui::Color32::from_rgb(30, 60, 7));
+        }
+    }
+
+    #[test]
+    fn blur_is_relative_to_the_image_size() {
+        // sigma = 0.05 * 0.4 * 100 = 2 px, small enough to blur at full size.
+        let small = background_pixels(&line_image(100), 0.4);
+        assert_eq!(small.size, [100, 100]);
+        assert!(red_at(&small, 50, 50) < 255);
+        assert!(red_at(&small, 52, 50) > 0);
+        assert_eq!(red_at(&small, 70, 50), 0);
+
+        // The same setting on an image twice as large spreads twice as far.
+        let large = background_pixels(&line_image(200), 0.4);
+        assert!(red_at(&large, 104, 100) > red_at(&small, 54, 50));
+        assert!(red_at(&large, 100, 100) < red_at(&small, 50, 50));
+    }
+
+    #[test]
+    fn large_blurs_are_computed_on_a_downscaled_copy() {
+        let color = image::Rgba([10, 20, 30, 255]);
+        let source = RgbaImage::from_pixel(4000, 2000, color);
+        // sigma = 0.05 * 1.0 * 4000 = 200 px, so the image is scaled by
+        // MAX_BLUR_SIGMA / 200 before blurring.
+        let pixels = background_pixels(&source, 1.0);
+        assert_eq!(pixels.size, [80, 40]);
+        // Edges are clamped, so a uniform image stays uniform.
+        assert!(pixels.pixels.iter().all(|pixel| {
+            pixel
+                .to_array()
+                .iter()
+                .zip([10u8, 20, 30, 255])
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1)
+        }));
+
+        // Small blurs on huge images are capped as well.
+        let pixels = background_pixels(&RgbaImage::new(8192, 1024), 0.01);
+        assert_eq!(pixels.size, [2048, 256]);
+    }
+
+    #[test]
+    fn blur_does_not_bleed_transparent_pixels() {
+        // Left half: invisible red. Right half: opaque blue.
+        let source = RgbaImage::from_fn(64, 8, |x, _| {
+            if x < 32 {
+                image::Rgba([255, 0, 0, 0])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            }
+        });
+        let pixels = background_pixels(&source, 0.5);
+        assert!(pixels.pixels.iter().all(|pixel| pixel.r() == 0));
+        assert!(pixels.pixels[31].a() > 0, "blue should blur into the gap");
+    }
+
+    #[test]
+    fn background_texture_is_built_once_per_blur_setting() {
+        let mut png = Vec::new();
+        line_image(64)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+
+        let mut layout = Layout::default();
+        layout.settings.background_image =
+            Some(PathBuf::from(format!("livesplit-embedded-image:{encoded}")));
+        layout.settings.transparent_background = false;
+        let timer = timer();
+        let ctx = Context::default();
+        let mut renderer = Renderer::default();
+        // Count uploads of textures other than egui's font atlas.
+        let mut uploads = |layout: &Layout| {
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 300.0))),
+                    ..Default::default()
+                },
+                |ui| renderer.draw(ui, layout, &timer),
+            );
+            let count = output
+                .textures_delta
+                .set
+                .iter()
+                .filter(|(id, _)| **id != egui::TextureId::default())
+                .filter(|(_, deltas)| deltas.iter().any(|delta| delta.pos.is_none()))
+                .count();
+            output.textures_delta.clear();
+            count
+        };
+
+        assert_eq!(uploads(&layout), 1);
+        assert_eq!(uploads(&layout), 0, "an unchanged blur must not re-blur");
+        layout.settings.image_blur = 0.5;
+        assert_eq!(uploads(&layout), 1, "a new blur must rebuild the texture");
+        assert_eq!(uploads(&layout), 0);
     }
 }

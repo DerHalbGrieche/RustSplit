@@ -16,3 +16,6 @@ egui.workspace = true
 image.workspace = true
 thiserror.workspace = true
 xmltree.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true

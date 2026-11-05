@@ -108,5 +108,15 @@ The desktop application and integration layer:
   semantics, comparison generation and analysis helpers.
 - Integration tests cover `.lss` roundtrips, `.lsl` parsing and the server
   protocol.
-- UI components are render-tested via `cargo check`; the renderer is designed
-  to be panic-free with missing times, empty runs and out-of-range indices.
+- `rustsplit-ui/tests/render.rs` renders whole layouts headlessly with
+  `egui_kittest` (no GPU): the default layout with fresh, running and finished
+  runs, transparent mode, empty runs, tiny and huge windows, horizontal
+  layouts, and every component type with missing data. The tests assert on
+  egui's shape output (rendered text, background rects, component rects, no
+  NaN geometry or out-of-window clipping) instead of pixel snapshots, so they
+  need no wgpu adapter and are stable across font rasterizers. The harness
+  also panics if any text needs a glyph the bundled fonts lack. There are no
+  snapshot images to update; when a change alters rendered text on purpose,
+  adjust the expected strings in the test.
+- Renderer unit tests cover layout scaling, clipping and the background image
+  blur and texture cache.
