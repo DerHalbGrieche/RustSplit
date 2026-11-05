@@ -26,5 +26,5 @@ pub use model::{
     MEDIAN_SEGMENTS, NONE, PERCENTILE, PERSONAL_BEST, WORST_SEGMENTS,
 };
 pub use time::{Time, TimeParseError, TimeSpan};
-pub use timer::{Clock, SystemClock, TestClock, Timer, TimerEvent};
+pub use timer::{Clock, SystemClock, TestClock, Timer, Timestamp};
 pub use xml::{XmlElement, XmlError};

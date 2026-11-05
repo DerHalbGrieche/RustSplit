@@ -4,6 +4,7 @@
 //! semantics.  Time is driven by a [`Clock`] so the timer can be tested
 //! deterministically.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,6 +18,13 @@ use crate::time::{Time, TimeSpan};
 pub trait Clock: Send + Sync {
     fn monotonic(&self) -> Duration;
     fn utc_now(&self) -> DateTime<Utc>;
+
+    /// How long ago `instant` (captured with `Instant::now()`, possibly on
+    /// another thread) was on this clock. An instant in the future was zero
+    /// time ago.
+    fn age_of(&self, instant: Instant) -> Duration {
+        instant.elapsed()
+    }
 }
 
 /// The normal system clock.
@@ -108,22 +116,40 @@ impl Clock for TestClock {
     fn utc_now(&self) -> DateTime<Utc> {
         self.utc()
     }
+
+    /// Real instants don't map onto a manually advanced clock, so they all
+    /// count as now. Tests of delayed handling capture [`Timer::now`] or use
+    /// [`Timer::timestamp_ago`] instead.
+    fn age_of(&self, _instant: Instant) -> Duration {
+        Duration::ZERO
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TimerEvent {
-    Started,
-    Split { index: i32 },
-    SkippedSplit { index: i32 },
-    UndidSplit { index: i32 },
-    Reset { previous_phase: TimerPhase },
-    Paused,
-    Resumed,
-    UndoAllPauses,
-    GameTimeInitialized,
-    ComparisonChanged(String),
-    TimingMethodChanged(TimingMethod),
-    RunChanged,
+/// A moment on a timer's clock, captured when an input arrived.
+///
+/// Input from other threads (global hotkeys, the server, the control socket,
+/// an auto splitter) reaches the UI thread some time after it happened, up to
+/// a frame later, or 100 ms while the window is hidden. [`Timer::at`]
+/// applies an action as if it ran at the captured moment, so a split
+/// received at T is recorded at T no matter when it is handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timestamp {
+    monotonic: Duration,
+    utc: DateTime<Utc>,
+}
+
+impl Timestamp {
+    /// Moves the timestamp `delta` into the future, keeping both clocks in
+    /// step.
+    fn later_by(self, delta: Duration) -> Self {
+        Self {
+            monotonic: self.monotonic.saturating_add(delta),
+            utc: chrono::Duration::from_std(delta)
+                .ok()
+                .and_then(|delta| self.utc.checked_add_signed(delta))
+                .unwrap_or(self.utc),
+        }
+    }
 }
 
 pub struct Timer {
@@ -148,7 +174,15 @@ pub struct Timer {
     /// Monotonic time at which the run was originally started.
     start_time_with_offset: i128,
     time_paused_at: TimeSpan,
-    events: Vec<TimerEvent>,
+    /// The clock reading actions use instead of "now", set by [`Timer::at`].
+    time_override: Option<Timestamp>,
+    /// When the latest start, split, skip, undo, reset or pause happened.
+    /// Timestamped actions are never applied before it.
+    last_action: Duration,
+    /// Custom variables that only live in memory, like the ones an auto
+    /// splitter sets. They are shown like the run's custom variables (and
+    /// take precedence over them) but are never saved.
+    pub temporary_variables: BTreeMap<String, String>,
 }
 
 impl Timer {
@@ -171,7 +205,9 @@ impl Timer {
             adjusted_start_time: now,
             start_time_with_offset: now,
             time_paused_at: TimeSpan::ZERO,
-            events: Vec::new(),
+            time_override: None,
+            last_action: Duration::ZERO,
+            temporary_variables: BTreeMap::new(),
         };
         timer.run.refresh_comparisons(&timer.comparison_settings);
         timer
@@ -185,15 +221,87 @@ impl Timer {
         &self.clock
     }
 
-    pub fn take_events(&mut self) -> Vec<TimerEvent> {
-        std::mem::take(&mut self.events)
+    /// The current moment on the timer's clock.
+    pub fn now(&self) -> Timestamp {
+        self.time_override.unwrap_or_else(|| Timestamp {
+            monotonic: self.clock.monotonic(),
+            utc: self.clock.utc_now(),
+        })
+    }
+
+    /// The moment `age` ago.
+    pub fn timestamp_ago(&self, age: Duration) -> Timestamp {
+        let now = self.now();
+        Timestamp {
+            monotonic: now.monotonic.saturating_sub(age),
+            utc: chrono::Duration::from_std(age)
+                .ok()
+                .and_then(|age| now.utc.checked_sub_signed(age))
+                .unwrap_or(now.utc),
+        }
+    }
+
+    /// The moment `instant` refers to. The instant can be captured on any
+    /// thread; one in the future counts as now.
+    pub fn timestamp_of(&self, instant: Instant) -> Timestamp {
+        self.timestamp_ago(self.clock.age_of(instant))
+    }
+
+    /// Runs `action` as if the clock read `at`: splits, starts, pauses,
+    /// attempt start/end times and game time changes are recorded at that
+    /// moment instead of now.
+    ///
+    /// A timestamp older than the timer's latest action is moved up to it,
+    /// so inputs from different sources that are handled out of order can't
+    /// make time run backwards (for example a negative segment).
+    pub fn at<R>(&mut self, at: Timestamp, action: impl FnOnce(&mut Self) -> R) -> R {
+        let at = match self.last_action.checked_sub(at.monotonic) {
+            Some(behind) if !behind.is_zero() => at.later_by(behind),
+            _ => at,
+        };
+        let previous = self.time_override.replace(at);
+        let result = action(self);
+        self.time_override = previous;
+        result
+    }
+
+    fn monotonic_nanos(&self) -> i128 {
+        self.now().monotonic.as_nanos() as i128
+    }
+
+    fn utc_now(&self) -> DateTime<Utc> {
+        self.now().utc
+    }
+
+    fn mark_action(&mut self) {
+        self.last_action = self.last_action.max(self.now().monotonic);
+    }
+
+    /// The value of a custom variable: a temporary one if set, otherwise the
+    /// run's permanent one.
+    pub fn custom_variable(&self, name: &str) -> Option<&str> {
+        self.temporary_variables
+            .get(name)
+            .or_else(|| self.run.metadata.custom_variables.get(name))
+            .map(String::as_str)
+    }
+
+    /// Sets a temporary (unsaved) custom variable. Returns whether the value
+    /// changed.
+    pub fn set_temporary_variable(&mut self, name: &str, value: &str) -> bool {
+        if self.temporary_variables.get(name).map(String::as_str) == Some(value) {
+            return false;
+        }
+        self.temporary_variables
+            .insert(name.to_string(), value.to_string());
+        true
     }
 
     pub fn current_time(&self) -> Time {
         let real_time = match self.phase {
             TimerPhase::NotRunning => Some(TimeSpan::ZERO),
             TimerPhase::Running => {
-                let elapsed = self.clock.monotonic().as_nanos() as i128 - self.adjusted_start_time;
+                let elapsed = self.monotonic_nanos() - self.adjusted_start_time;
                 Some(TimeSpan::from_nanos(
                     elapsed.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
                 ))
@@ -244,7 +352,7 @@ impl Timer {
     pub fn pause_time(&self) -> Option<TimeSpan> {
         match self.phase {
             TimerPhase::Paused => Some(TimeSpan::from_nanos(
-                (self.clock.monotonic().as_nanos() as i128
+                (self.monotonic_nanos()
                     - self.start_time_with_offset
                     - self.time_paused_at.as_nanos() as i128)
                     .clamp(i64::MIN as i128, i64::MAX as i128) as i64,
@@ -272,7 +380,7 @@ impl Timer {
             TimerPhase::Running | TimerPhase::Paused => Some(
                 self.attempt_started
                     .map(|started| {
-                        let duration = self.clock.utc_now().signed_duration_since(started);
+                        let duration = self.utc_now().signed_duration_since(started);
                         TimeSpan::from_nanos(duration.num_nanoseconds().unwrap_or(0))
                     })
                     .unwrap_or_default(),
@@ -294,10 +402,11 @@ impl Timer {
         if self.phase != TimerPhase::NotRunning {
             return;
         }
-        let now = self.clock.monotonic().as_nanos() as i128;
+        self.mark_action();
+        let now = self.monotonic_nanos();
         self.phase = TimerPhase::Running;
         self.current_split_index = 0;
-        self.attempt_started = Some(self.clock.utc_now());
+        self.attempt_started = Some(self.utc_now());
         self.attempt_ended = None;
         self.adjusted_start_time = now - self.run.offset.as_nanos() as i128;
         self.start_time_with_offset = self.adjusted_start_time;
@@ -308,7 +417,6 @@ impl Timer {
         self.loading_times = TimeSpan::ZERO;
         self.run.attempt_count += 1;
         self.run.has_changed = true;
-        self.events.push(TimerEvent::Started);
     }
 
     pub fn split(&mut self) {
@@ -326,7 +434,9 @@ impl Timer {
         if index < 0 || index as usize >= self.run.segments.len() {
             return;
         }
-        let custom_variables = self.run.metadata.custom_variables.clone();
+        self.mark_action();
+        let mut custom_variables = self.run.metadata.custom_variables.clone();
+        custom_variables.extend(self.temporary_variables.clone());
         if let Some(segment) = self.run.segments.get_mut(index as usize) {
             segment.split_time = current_time;
             for (name, value) in custom_variables {
@@ -336,10 +446,9 @@ impl Timer {
         self.current_split_index += 1;
         if self.current_split_index as usize >= self.run.segments.len() {
             self.phase = TimerPhase::Ended;
-            self.attempt_ended = Some(self.clock.utc_now());
+            self.attempt_ended = Some(self.utc_now());
         }
         self.run.has_changed = true;
-        self.events.push(TimerEvent::Split { index });
         self.refresh_comparisons();
     }
 
@@ -352,6 +461,7 @@ impl Timer {
         {
             return;
         }
+        self.mark_action();
         let index = self.current_split_index;
         if let Some(segment) = self.run.segments.get_mut(index as usize) {
             segment.split_time = Time::default();
@@ -359,7 +469,6 @@ impl Timer {
         }
         self.current_split_index += 1;
         self.run.has_changed = true;
-        self.events.push(TimerEvent::SkippedSplit { index });
         self.refresh_comparisons();
     }
 
@@ -367,6 +476,7 @@ impl Timer {
         if self.phase == TimerPhase::NotRunning || self.current_split_index <= 0 {
             return;
         }
+        self.mark_action();
         if self.phase == TimerPhase::Ended {
             self.phase = TimerPhase::Running;
             self.attempt_ended = None;
@@ -378,7 +488,6 @@ impl Timer {
             segment.custom_variable_values.clear();
         }
         self.run.has_changed = true;
-        self.events.push(TimerEvent::UndidSplit { index });
         self.refresh_comparisons();
     }
 
@@ -399,8 +508,9 @@ impl Timer {
     }
 
     fn reset_state(&mut self, update_times: bool) {
+        self.mark_action();
         if self.phase != TimerPhase::Ended {
-            self.attempt_ended = Some(self.clock.utc_now());
+            self.attempt_ended = Some(self.utc_now());
         }
         self.is_game_time_paused = false;
         self.game_time_pause_time = None;
@@ -415,14 +525,12 @@ impl Timer {
     }
 
     fn reset_splits(&mut self) {
-        let previous_phase = self.phase;
         self.phase = TimerPhase::NotRunning;
         self.current_split_index = -1;
         for segment in &mut self.run.segments {
             segment.split_time = Time::default();
             segment.custom_variable_values.clear();
         }
-        self.events.push(TimerEvent::Reset { previous_phase });
         self.run.fix_splits();
         self.refresh_comparisons();
     }
@@ -439,15 +547,15 @@ impl Timer {
     pub fn pause(&mut self) {
         match self.phase {
             TimerPhase::Running => {
+                self.mark_action();
                 self.time_paused_at = self.current_time().real_time.unwrap_or_default();
                 self.phase = TimerPhase::Paused;
-                self.events.push(TimerEvent::Paused);
             }
             TimerPhase::Paused => {
-                self.adjusted_start_time = self.clock.monotonic().as_nanos() as i128
-                    - self.time_paused_at.as_nanos() as i128;
+                self.mark_action();
+                self.adjusted_start_time =
+                    self.monotonic_nanos() - self.time_paused_at.as_nanos() as i128;
                 self.phase = TimerPhase::Running;
-                self.events.push(TimerEvent::Resumed);
             }
             TimerPhase::NotRunning => self.start(),
             TimerPhase::Ended => {}
@@ -468,7 +576,6 @@ impl Timer {
             }
         }
         self.adjusted_start_time = self.start_time_with_offset;
-        self.events.push(TimerEvent::UndoAllPauses);
     }
 
     pub fn is_game_time_paused(&self) -> bool {
@@ -481,7 +588,6 @@ impl Timer {
         }
         self.is_game_time_initialized = true;
         self.loading_times = TimeSpan::ZERO;
-        self.events.push(TimerEvent::GameTimeInitialized);
     }
 
     pub fn set_loading_times(&mut self, loading_times: TimeSpan) {
@@ -560,14 +666,12 @@ impl Timer {
         let comparison = comparison.into();
         if comparison != self.current_comparison {
             self.current_comparison = comparison.clone();
-            self.events.push(TimerEvent::ComparisonChanged(comparison));
         }
     }
 
     pub fn set_timing_method(&mut self, method: TimingMethod) {
         if method != self.current_timing_method {
             self.current_timing_method = method;
-            self.events.push(TimerEvent::TimingMethodChanged(method));
         }
     }
 
@@ -594,7 +698,6 @@ impl Timer {
             self.current_comparison = PERSONAL_BEST.to_string();
         }
         self.refresh_comparisons();
-        self.events.push(TimerEvent::RunChanged);
     }
 
     fn update_times(&mut self) {
@@ -823,5 +926,146 @@ mod tests {
             timer.current_time().real_time.unwrap(),
             TimeSpan::from_seconds(5)
         );
+    }
+
+    #[test]
+    fn delayed_split_is_recorded_at_its_timestamp() {
+        let (clock, mut timer) = test_timer();
+        timer.start();
+        clock.advance(TimeSpan::from_seconds(10));
+        let received = timer.now();
+        let received_utc = clock.utc();
+        // The UI thread gets to the split 100 ms later.
+        clock.advance(TimeSpan::from_millis(100));
+        timer.at(received, Timer::split);
+        assert_eq!(
+            timer.run.segments[0].split_time.real_time,
+            Some(TimeSpan::from_seconds(10))
+        );
+        clock.advance(TimeSpan::from_seconds(2));
+        let received = timer.now();
+        clock.advance(TimeSpan::from_millis(80));
+        timer.at(received, Timer::split);
+        assert_eq!(timer.phase, TimerPhase::Ended);
+        assert_eq!(
+            timer.run.segments[1].split_time.real_time,
+            Some(TimeSpan::from_millis(12_100))
+        );
+        assert_eq!(
+            timer.attempt_ended,
+            Some(received_utc + chrono::Duration::milliseconds(2100))
+        );
+        // Outside of `at`, the clock is "now" again.
+        assert_eq!(timer.now().monotonic, clock.monotonic());
+    }
+
+    #[test]
+    fn delayed_start_and_pause_use_their_timestamps() {
+        let (clock, mut timer) = test_timer();
+        let started_utc = clock.utc();
+        let received = timer.now();
+        clock.advance(TimeSpan::from_millis(100));
+        timer.at(received, Timer::start);
+        assert_eq!(timer.attempt_started, Some(started_utc));
+        assert_eq!(
+            timer.current_time().real_time,
+            Some(TimeSpan::from_millis(100))
+        );
+
+        clock.advance(TimeSpan::from_seconds(5));
+        let paused = timer.timestamp_ago(Duration::from_millis(40));
+        timer.at(paused, Timer::pause);
+        assert_eq!(timer.phase, TimerPhase::Paused);
+        assert_eq!(
+            timer.current_time().real_time,
+            Some(TimeSpan::from_millis(5060))
+        );
+
+        clock.advance(TimeSpan::from_seconds(1));
+        let resumed = timer.timestamp_ago(Duration::from_millis(500));
+        timer.at(resumed, Timer::pause);
+        assert_eq!(timer.phase, TimerPhase::Running);
+        assert_eq!(
+            timer.current_time().real_time,
+            Some(TimeSpan::from_millis(5560))
+        );
+        assert_eq!(timer.pause_time(), Some(TimeSpan::from_millis(540)));
+    }
+
+    #[test]
+    fn delayed_reset_records_the_attempt_end_at_its_timestamp() {
+        let (clock, mut timer) = test_timer();
+        timer.start();
+        clock.advance(TimeSpan::from_seconds(3));
+        let received = timer.now();
+        let received_utc = clock.utc();
+        clock.advance(TimeSpan::from_millis(100));
+        timer.at(received, Timer::reset);
+        assert_eq!(timer.run.attempts.len(), 1);
+        assert_eq!(timer.run.attempts[0].ended, Some(received_utc));
+    }
+
+    #[test]
+    fn timestamps_never_go_before_the_latest_action() {
+        let (clock, mut timer) = test_timer();
+        timer.start();
+        clock.advance(TimeSpan::from_seconds(10));
+        let older = timer.timestamp_ago(Duration::from_millis(50));
+        let older_utc = clock.utc() - chrono::Duration::milliseconds(50);
+        // A split handled "now" first, then an older one from another source.
+        timer.split();
+        timer.at(older, Timer::split);
+        assert_eq!(
+            timer.run.segments[0].split_time.real_time,
+            Some(TimeSpan::from_seconds(10))
+        );
+        assert_eq!(
+            timer.run.segments[1].split_time.real_time,
+            Some(TimeSpan::from_seconds(10))
+        );
+        // The wall clock moves along with the monotonic one.
+        assert_eq!(
+            timer.attempt_ended,
+            Some(older_utc + chrono::Duration::milliseconds(50))
+        );
+    }
+
+    #[test]
+    fn instants_from_other_threads_become_timestamps() {
+        let mut timer = Timer::with_system_clock(Run::with_segments("Game", "Any%", ["One"]));
+        let received = std::thread::spawn(Instant::now).join().unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        let at = timer.timestamp_of(received);
+        timer.at(at, Timer::start);
+        let elapsed = timer.current_time().real_time.unwrap();
+        assert!(elapsed >= TimeSpan::from_millis(30), "{elapsed:?}");
+        // A future instant counts as now.
+        let future = timer.timestamp_of(Instant::now() + Duration::from_secs(60));
+        assert!(future.monotonic <= timer.now().monotonic);
+    }
+
+    #[test]
+    fn temporary_variables_are_shown_but_not_saved() {
+        let (clock, mut timer) = test_timer();
+        timer
+            .run
+            .metadata
+            .custom_variables
+            .insert("Route".to_string(), "Glitchless".to_string());
+        assert!(timer.set_temporary_variable("Deaths", "3"));
+        assert!(!timer.set_temporary_variable("Deaths", "3"));
+        assert!(timer.set_temporary_variable("Route", "Any%"));
+        assert_eq!(timer.custom_variable("Deaths"), Some("3"));
+        assert_eq!(timer.custom_variable("Route"), Some("Any%"));
+        assert_eq!(timer.custom_variable("Missing"), None);
+        assert!(!timer.run.has_changed);
+
+        timer.start();
+        clock.advance(TimeSpan::from_seconds(1));
+        timer.split();
+        assert_eq!(timer.run.segments[0].custom_variable_values["Deaths"], "3");
+        let saved = crate::save_run_to_string(&timer.run).unwrap();
+        assert!(!saved.contains("Deaths"));
+        assert!(saved.contains("Glitchless"));
     }
 }

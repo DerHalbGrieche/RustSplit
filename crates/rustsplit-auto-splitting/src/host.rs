@@ -306,9 +306,11 @@ impl AutoSplitterHost {
                 generation,
                 seq,
                 command,
+                issued,
             } if generation == current => {
                 if matches!(self.state, State::Active(_)) {
-                    let effect = apply_command(timer, &command);
+                    let at = timer.timestamp_of(issued);
+                    let effect = timer.at(at, |timer| apply_command(timer, &command));
                     outcome.autosave |= effect.autosave;
                     outcome.commands += 1;
                 }
