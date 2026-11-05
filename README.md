@@ -247,9 +247,14 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a tour of the data flow.
 - UI-only Server commands (screenshots, hotkey-profile switching, auto-splitter
   paths) return safe no-op responses. `switchsplits` and `switchlayout` are
   handled by the application.
-- Background images are supported from local files and from LiveSplit layouts
-  that embed an image. Image blur uses LiveSplit's 0..1 scale relative to
-  the image size and is applied once when the image or the blur changes.
+- Layout backgrounds use LiveSplit's types: solid color, vertical or
+  horizontal gradient, or image. An image background draws only the image,
+  from a local file or the image a LiveSplit layout embeds. As in LiveSplit,
+  image opacity darkens the image over black; in RustSplit's transparent mode
+  it is a real opacity instead, so the desktop shows through. Image blur uses
+  LiveSplit's 0..1 scale relative to the image size and is applied once when
+  the image or the blur changes. Local image paths are a RustSplit extension
+  (`BackgroundImagePath`) that LiveSplit ignores.
 
 ## Credits
 

@@ -1,9 +1,12 @@
 //! Layout editor: component order, per-component settings and global theme.
 
+use std::path::{Path, PathBuf};
+
 use egui::{Context, Grid, Key, RichText, ScrollArea, TextEdit};
 
 use rustsplit_ui::components::{default_component_for_path, ADDABLE_COMPONENTS};
-use rustsplit_ui::{color_to_hex, parse_color, GradientType, Layout, LayoutMode, LayoutSettings};
+use rustsplit_ui::layout_xml::EMBEDDED_IMAGE_PREFIX;
+use rustsplit_ui::{color_to_hex, parse_color, BackgroundType, Layout, LayoutMode, LayoutSettings};
 
 use crate::config::AppConfig;
 
@@ -16,7 +19,14 @@ pub enum LayoutEditorEvent {
     SaveAs,
     Cancel,
     ResetDefault,
+    /// Pick a background image; the app answers with
+    /// [`LayoutEditor::set_background_image`].
+    BrowseBackgroundImage,
 }
+
+/// Image formats the renderer can decode.
+pub const BACKGROUND_IMAGE_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"];
 
 pub struct LayoutEditor {
     pub open: bool,
@@ -25,6 +35,9 @@ pub struct LayoutEditor {
     add_path: String,
     show_global: bool,
     error: Option<String>,
+    /// Set while the app's file dialog picks a background image, so the
+    /// first Escape closes the built-in browser instead of the editor.
+    picking_image: bool,
 }
 
 impl Default for LayoutEditor {
@@ -39,6 +52,7 @@ impl Default for LayoutEditor {
                 .unwrap_or_default(),
             show_global: false,
             error: None,
+            picking_image: false,
         }
     }
 }
@@ -50,6 +64,7 @@ impl LayoutEditor {
         self.selected = 0;
         self.show_global = false;
         self.error = None;
+        self.picking_image = false;
     }
 
     pub fn draft_cloned(&self) -> Option<Layout> {
@@ -59,6 +74,27 @@ impl LayoutEditor {
     pub fn close(&mut self) {
         self.open = false;
         self.draft = None;
+    }
+
+    /// Where the background image dialog starts: the current image file, or
+    /// the layout file's directory.
+    pub fn background_image_start(&self) -> Option<PathBuf> {
+        let draft = self.draft.as_ref()?;
+        draft
+            .settings
+            .background_image
+            .clone()
+            .filter(|path| !is_embedded(path))
+            .or_else(|| draft.file_path.clone())
+    }
+
+    /// Use `path` as the draft's background image.
+    pub fn set_background_image(&mut self, path: PathBuf) {
+        self.picking_image = false;
+        if let Some(draft) = self.draft.as_mut() {
+            draft.settings.background_image = Some(path);
+            draft.settings.background_type = BackgroundType::Image;
+        }
     }
 
     pub fn show(&mut self, ctx: &Context, config: &AppConfig) -> LayoutEditorEvent {
@@ -78,6 +114,7 @@ impl LayoutEditor {
         let add_path = &mut self.add_path;
         let show_global = &mut self.show_global;
         let error = &mut self.error;
+        let picking_image = &mut self.picking_image;
 
         egui::Window::new("Layout Editor")
             .open(&mut open)
@@ -122,7 +159,10 @@ impl LayoutEditor {
                     ScrollArea::vertical()
                         .id_salt("layout-editor-global")
                         .show(ui, |ui| {
-                            global_settings_ui(ui, &mut draft.settings);
+                            if global_settings_ui(ui, &mut draft.settings) {
+                                event = LayoutEditorEvent::BrowseBackgroundImage;
+                                *picking_image = true;
+                            }
                         });
                 } else {
                     ui.horizontal(|ui| {
@@ -278,7 +318,11 @@ impl LayoutEditor {
                     }
                 });
                 if ctx.input(|input| input.key_pressed(Key::Escape)) {
-                    event = LayoutEditorEvent::Cancel;
+                    if *picking_image {
+                        *picking_image = false;
+                    } else {
+                        event = LayoutEditorEvent::Cancel;
+                    }
                 }
             });
 
@@ -357,7 +401,14 @@ fn font_override_ui(
     });
 }
 
-fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
+fn is_embedded(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|path| path.starts_with(EMBEDDED_IMAGE_PREFIX))
+}
+
+/// Returns whether the user asked to browse for a background image.
+fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) -> bool {
+    let mut browse = false;
     Grid::new("layout-global-grid")
         .num_columns(2)
         .striped(true)
@@ -381,54 +432,78 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
                 if changed && !settings.transparent_background && !settings.has_background() {
                     settings.background_color = egui::Color32::from_rgb(15, 15, 15);
                     settings.background_color2 = egui::Color32::TRANSPARENT;
-                    settings.background_gradient = GradientType::Plain;
+                    settings.background_type = BackgroundType::SolidColor;
                 }
             });
             ui.end_row();
-            ui.label("Background color");
-            color_edit(ui, &mut settings.background_color);
-            ui.end_row();
-            ui.label("Background color 2");
-            color_edit(ui, &mut settings.background_color2);
-            ui.end_row();
             ui.label("Background type");
             egui::ComboBox::from_id_salt("layout-bg-type")
-                .selected_text(settings.background_gradient.label())
+                .selected_text(settings.background_type.label())
                 .show_ui(ui, |ui| {
-                    for gradient in [
-                        GradientType::Plain,
-                        GradientType::Vertical,
-                        GradientType::Horizontal,
-                    ] {
+                    for background_type in BackgroundType::ALL {
                         ui.selectable_value(
-                            &mut settings.background_gradient,
-                            gradient,
-                            gradient.label(),
+                            &mut settings.background_type,
+                            background_type,
+                            background_type.label(),
                         );
                     }
                 });
             ui.end_row();
-            ui.label("Background image");
-            let mut path = settings
-                .background_image
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            if ui.text_edit_singleline(&mut path).changed() {
-                settings.background_image = if path.trim().is_empty() {
-                    None
-                } else {
-                    Some(path.into())
-                };
-            }
-            ui.end_row();
-            ui.label("Image opacity / blur");
-            ui.horizontal(|ui| {
+            if settings.background_type == BackgroundType::Image {
+                ui.label("Background image");
+                ui.horizontal(|ui| {
+                    match settings.background_image.as_deref() {
+                        Some(path) if is_embedded(path) => {
+                            ui.label("Embedded in the layout");
+                        }
+                        _ => {
+                            let mut path = settings
+                                .background_image
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_default();
+                            if ui.text_edit_singleline(&mut path).changed() {
+                                settings.background_image = if path.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(path.into())
+                                };
+                            }
+                        }
+                    }
+                    browse = ui.button("Browse…").clicked();
+                    if ui
+                        .add_enabled(
+                            settings.background_image.is_some(),
+                            egui::Button::new("Remove"),
+                        )
+                        .clicked()
+                    {
+                        settings.background_image = None;
+                    }
+                });
+                ui.end_row();
+                ui.label("Image opacity").on_hover_text(
+                    "Like LiveSplit, the image is drawn over black, so lower values \
+                     darken it. With a transparent background the desktop shows \
+                     through instead.",
+                );
                 ui.add(egui::Slider::new(&mut settings.image_opacity, 0.0..=1.0));
+                ui.end_row();
+                ui.label("Image blur");
                 // LiveSplit's blur is a 0..1 fraction of the image size.
                 ui.add(egui::Slider::new(&mut settings.image_blur, 0.0..=1.0));
-            });
-            ui.end_row();
+                ui.end_row();
+            } else {
+                ui.label("Background color");
+                color_edit(ui, &mut settings.background_color);
+                ui.end_row();
+                if settings.background_type != BackgroundType::SolidColor {
+                    ui.label("Background color 2");
+                    color_edit(ui, &mut settings.background_color2);
+                    ui.end_row();
+                }
+            }
             ui.label("Opacity");
             ui.add(egui::Slider::new(&mut settings.opacity, 0.0..=1.0));
             ui.end_row();
@@ -527,6 +602,7 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
         .small()
         .color(ui.visuals().weak_text_color()),
     );
+    browse
 }
 
 fn color_edit(ui: &mut egui::Ui, color: &mut egui::Color32) {

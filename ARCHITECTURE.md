@@ -43,8 +43,8 @@ the analysis helpers.
 Layout and rendering. The crate is independent of the application and could be
 reused by another frontend.
 
-- `layout.rs` — `Layout`, `LayoutSettings`, `LayoutComponent`, fonts, colors
-  and gradients.
+- `layout.rs` — `Layout`, `LayoutSettings`, `LayoutComponent`, fonts, colors,
+  gradients and the layout background type.
 - `layout_xml.rs` — `.lsl` parser/writer, including legacy .NET font blobs.
 - `components/` — typed settings for every built-in component and their egui
   renderers/settings UIs:
@@ -110,13 +110,13 @@ The desktop application and integration layer:
   protocol.
 - `rustsplit-ui/tests/render.rs` renders whole layouts headlessly with
   `egui_kittest` (no GPU): the default layout with fresh, running and finished
-  runs, transparent mode, empty runs, tiny and huge windows, horizontal
-  layouts, and every component type with missing data. The tests assert on
+  runs, transparent mode, image backgrounds, empty runs, tiny and huge
+  windows, horizontal layouts, and every component type with missing data. The tests assert on
   egui's shape output (rendered text, background rects, component rects, no
   NaN geometry or out-of-window clipping) instead of pixel snapshots, so they
   need no wgpu adapter and are stable across font rasterizers. The harness
   also panics if any text needs a glyph the bundled fonts lack. There are no
   snapshot images to update; when a change alters rendered text on purpose,
   adjust the expected strings in the test.
-- Renderer unit tests cover layout scaling, clipping and the background image
-  blur and texture cache.
+- Renderer unit tests cover layout scaling, clipping, the background image
+  blur and texture cache, and extracting LiveSplit's embedded .NET bitmaps.

@@ -38,13 +38,18 @@
 //! ## Background images
 //!
 //! LiveSplit stores the background image itself as a base64
-//! `BinaryFormatter` blob in `<BackgroundImage>`.  Decoding .NET image
-//! serialization is outside the scope of the layout loader, but the blob is
-//! not discarded: it is represented by an opaque path prefixed with
-//! [`EMBEDDED_IMAGE_PREFIX`] in [`LayoutSettings::background_image`].  Saving
-//! writes the original blob back unchanged.  The image is not decoded for
-//! rendering yet.  RustSplit's own `<BackgroundImagePath>` extension is still
-//! understood and written when the image is a plain filesystem path.
+//! `BinaryFormatter` blob in `<BackgroundImage>`, and draws it only when
+//! `<BackgroundType>` is `Image`.  The loader does not decode the blob: it is
+//! represented by an opaque path prefixed with [`EMBEDDED_IMAGE_PREFIX`] in
+//! [`LayoutSettings::background_image`], and the renderer extracts the image
+//! from it.  Saving writes the original blob back unchanged, whatever the
+//! background type, as LiveSplit does.
+//!
+//! A local image file uses RustSplit's own `<BackgroundImagePath>` extension,
+//! written only for `Image` backgrounds.  RustSplit used to write it next to a
+//! color `BackgroundType` and paint the colors over the image; such files are
+//! read as `Image` when those colors let the image show through, so they keep
+//! their look.
 
 use std::path::{Path, PathBuf};
 
@@ -54,7 +59,7 @@ use xmltree::XMLNode;
 
 use crate::components::Component;
 use crate::layout::{
-    parse_color, FontOverrides, FontSpec, GradientType, Layout, LayoutComponent, LayoutMode,
+    parse_color, BackgroundType, FontOverrides, FontSpec, Layout, LayoutComponent, LayoutMode,
     LayoutSettings,
 };
 use crate::xml::{
@@ -241,19 +246,31 @@ fn parse_layout_settings(
         settings.text_outline_color,
     );
     settings.shadows_color = parse_color(value("ShadowsColor").as_deref(), settings.shadows_color);
-    settings.background_gradient =
-        parse_background_gradient(element, version, settings.background_gradient);
-    settings.background_image =
-        parse_background_image(element).or_else(|| settings.background_image.clone());
+    settings.background_type = parse_background_type(element, version, settings.background_type);
+    let transparent = value("TransparentBackground");
+    if let Some(raw) = child_text(element, "BackgroundImage").filter(|raw| !raw.is_empty()) {
+        settings.background_image = Some(PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{raw}")));
+    } else if let Some(path) =
+        child_text(element, "BackgroundImagePath").filter(|path| !path.is_empty())
+    {
+        settings.background_image = Some(PathBuf::from(path));
+        // Older RustSplit wrote the path next to a color type and painted the
+        // colors over the image (nothing in transparent mode).  Keep what
+        // those layouts showed: the image wherever the colors let it through.
+        if settings.background_type != BackgroundType::Image
+            && !parse_bool(transparent.as_deref(), false)
+            && !colors_hide_image(&settings)
+        {
+            settings.background_type = BackgroundType::Image;
+        }
+    }
     settings.image_opacity = parse_f32(value("ImageOpacity").as_deref(), settings.image_opacity);
     settings.image_blur = parse_f32(value("ImageBlur").as_deref(), settings.image_blur);
     // RustSplit extension.  Older layouts without it are treated as
     // transparent when they do not paint a background, so their text gets the
     // high-contrast treatment automatically.
-    settings.transparent_background = parse_bool(
-        value("TransparentBackground").as_deref(),
-        !settings.has_background(),
-    );
+    settings.transparent_background =
+        parse_bool(transparent.as_deref(), !settings.has_background());
     if let Some(font) = child(element, "TimerFont") {
         settings.timer_font = parse_font(font, &settings.timer_font);
     }
@@ -287,60 +304,46 @@ fn parse_layout_settings(
     settings
 }
 
-fn parse_background_gradient(
+fn parse_background_type(
     element: &XmlElement,
     version: LayoutVersion,
-    default: GradientType,
-) -> GradientType {
+    default: BackgroundType,
+) -> BackgroundType {
+    let modern = || {
+        child_text(element, "BackgroundType").map(|value| BackgroundType::parse(&value, default))
+    };
+    let legacy = || {
+        child_text(element, "BackgroundGradient")
+            .map(|value| parse_legacy_gradient(&value, default))
+    };
     if version.at_least(1, 6, 1) {
-        if let Some(value) = child_text(element, "BackgroundType") {
-            return parse_background_type(&value, default);
-        }
-        if let Some(value) = child_text(element, "BackgroundGradient") {
-            return parse_legacy_gradient(&value, default);
-        }
+        modern().or_else(legacy).unwrap_or(default)
     } else {
-        if let Some(value) = child_text(element, "BackgroundGradient") {
-            return parse_legacy_gradient(&value, default);
-        }
-        if let Some(value) = child_text(element, "BackgroundType") {
-            return parse_background_type(&value, default);
-        }
-    }
-    default
-}
-
-/// Modern `BackgroundType` enum.
-fn parse_background_type(value: &str, default: GradientType) -> GradientType {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "solidcolor" => GradientType::Plain,
-        "verticalgradient" => GradientType::Vertical,
-        "horizontalgradient" => GradientType::Horizontal,
-        // `GradientType` has no image variant; the embedded background image
-        // is tracked separately in `LayoutSettings::background_image`.
-        "image" => GradientType::Plain,
-        _ => default,
+        legacy().or_else(modern).unwrap_or(default)
     }
 }
 
 /// Legacy `BackgroundGradient` was a three-value switch in LiveSplit:
 /// `Plain`, `Vertical`, and everything else became a horizontal gradient.
-fn parse_legacy_gradient(value: &str, default: GradientType) -> GradientType {
+fn parse_legacy_gradient(value: &str, default: BackgroundType) -> BackgroundType {
     match value.trim().to_ascii_lowercase().as_str() {
         "" => default,
-        "plain" => GradientType::Plain,
-        "vertical" => GradientType::Vertical,
-        _ => GradientType::Horizontal,
+        "plain" => BackgroundType::SolidColor,
+        "vertical" => BackgroundType::VerticalGradient,
+        _ => BackgroundType::HorizontalGradient,
     }
 }
 
-fn parse_background_image(element: &XmlElement) -> Option<PathBuf> {
-    if let Some(raw) = child_text(element, "BackgroundImage").filter(|raw| !raw.is_empty()) {
-        return Some(PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{raw}")));
+/// Whether the color fill of a non-image background is fully opaque, so a
+/// background image painted under it (as older RustSplit did) was invisible.
+fn colors_hide_image(settings: &LayoutSettings) -> bool {
+    match settings.background_type {
+        BackgroundType::SolidColor => settings.background_color.a() == 255,
+        BackgroundType::VerticalGradient | BackgroundType::HorizontalGradient => {
+            settings.background_color.a() == 255 && settings.background_color2.a() == 255
+        }
+        BackgroundType::Image => false,
     }
-    child_text(element, "BackgroundImagePath")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
 }
 
 fn parse_font_overrides(element: &XmlElement, overrides: &mut FontOverrides) {
@@ -924,25 +927,30 @@ fn settings_to_xml(settings: &LayoutSettings) -> XmlElement {
     add_text(
         &mut element,
         "BackgroundType",
-        background_type_label(settings),
+        settings.background_type.xml_name(),
     );
-    match embedded_background_image(settings) {
+    let embedded = embedded_background_image(settings);
+    match embedded {
         Some(raw) => element.children.push(XMLNode::Element(cdata_element(
             "BackgroundImage",
             raw.to_string(),
         ))),
         None => add_text(&mut element, "BackgroundImage", ""),
     }
-    if embedded_background_image(settings).is_none() {
-        if let Some(path) = &settings.background_image {
-            // RustSplit extension for ordinary filesystem paths.  LiveSplit
-            // ignores unknown settings elements.
-            add_text(
-                &mut element,
-                "BackgroundImagePath",
-                path.display().to_string(),
-            );
-        }
+    if let (None, Some(path), BackgroundType::Image) = (
+        embedded,
+        &settings.background_image,
+        settings.background_type,
+    ) {
+        // RustSplit extension for ordinary filesystem paths.  LiveSplit
+        // ignores unknown settings elements.  It is only written for image
+        // backgrounds: to the parser, a path next to a color type marks an
+        // older RustSplit layout.
+        add_text(
+            &mut element,
+            "BackgroundImagePath",
+            path.display().to_string(),
+        );
     }
     add_text(
         &mut element,
@@ -959,19 +967,6 @@ fn settings_to_xml(settings: &LayoutSettings) -> XmlElement {
     add_bool(&mut element, "AllowResizing", settings.allow_resizing);
     add_bool(&mut element, "AllowMoving", settings.allow_moving);
     element
-}
-
-fn background_type_label(settings: &LayoutSettings) -> &'static str {
-    if embedded_background_image(settings).is_some() {
-        return "Image";
-    }
-    match settings.background_gradient {
-        GradientType::Plain | GradientType::PlainWithDeltaColor | GradientType::Alternating => {
-            "SolidColor"
-        }
-        GradientType::Vertical | GradientType::VerticalWithDeltaColor => "VerticalGradient",
-        GradientType::Horizontal | GradientType::HorizontalWithDeltaColor => "HorizontalGradient",
-    }
 }
 
 fn embedded_background_image(settings: &LayoutSettings) -> Option<&str> {

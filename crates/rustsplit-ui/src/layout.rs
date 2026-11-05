@@ -81,6 +81,66 @@ impl GradientType {
     }
 }
 
+/// What the layout background is painted with, LiveSplit's `BackgroundType`.
+/// With [`BackgroundType::Image`] only the image is drawn; the background
+/// colors are kept but not painted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BackgroundType {
+    #[default]
+    SolidColor,
+    VerticalGradient,
+    HorizontalGradient,
+    Image,
+}
+
+impl BackgroundType {
+    pub const ALL: [Self; 4] = [
+        Self::SolidColor,
+        Self::VerticalGradient,
+        Self::HorizontalGradient,
+        Self::Image,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SolidColor => "Solid Color",
+            Self::VerticalGradient => "Vertical Gradient",
+            Self::HorizontalGradient => "Horizontal Gradient",
+            Self::Image => "Image",
+        }
+    }
+
+    /// The `.lsl` spelling.
+    pub fn xml_name(self) -> &'static str {
+        match self {
+            Self::SolidColor => "SolidColor",
+            Self::VerticalGradient => "VerticalGradient",
+            Self::HorizontalGradient => "HorizontalGradient",
+            Self::Image => "Image",
+        }
+    }
+
+    pub fn parse(value: &str, default: Self) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "solidcolor" => Self::SolidColor,
+            "verticalgradient" => Self::VerticalGradient,
+            "horizontalgradient" => Self::HorizontalGradient,
+            "image" => Self::Image,
+            _ => default,
+        }
+    }
+
+    /// The color fill, or `None` for an image background.
+    pub fn gradient(self) -> Option<GradientType> {
+        match self {
+            Self::SolidColor => Some(GradientType::Plain),
+            Self::VerticalGradient => Some(GradientType::Vertical),
+            Self::HorizontalGradient => Some(GradientType::Horizontal),
+            Self::Image => None,
+        }
+    }
+}
+
 /// A font as configured in LiveSplit.  `raw` keeps the original .NET
 /// BinaryFormatter blob so unchanged layouts can be saved without losing
 /// information.
@@ -153,8 +213,15 @@ pub struct LayoutSettings {
     pub paused_color: Color32,
     pub text_outline_color: Color32,
     pub shadows_color: Color32,
-    pub background_gradient: GradientType,
+    pub background_type: BackgroundType,
+    /// A local file, or a LiveSplit-embedded image (see
+    /// [`crate::layout_xml::EMBEDDED_IMAGE_PREFIX`]). Only drawn when
+    /// `background_type` is [`BackgroundType::Image`]. It is kept while the
+    /// type is something else, so switching back in the editor does not lose
+    /// it; `.lsl` files keep an embedded image either way, like LiveSplit.
     pub background_image: Option<PathBuf>,
+    /// LiveSplit's `ImageOpacity`, 0..1. LiveSplit draws the image over its
+    /// black window, so this acts as brightness; see the renderer.
     pub image_opacity: f32,
     pub image_blur: f32,
     /// RustSplit extension: hide the layout background and draw text with a
@@ -192,7 +259,7 @@ impl Default for LayoutSettings {
             paused_color: Color32::from_rgb(122, 122, 122),
             text_outline_color: Color32::TRANSPARENT,
             shadows_color: Color32::from_rgba_unmultiplied(0, 0, 0, 128),
-            background_gradient: GradientType::Plain,
+            background_type: BackgroundType::SolidColor,
             background_image: None,
             image_opacity: 1.0,
             image_blur: 0.0,
@@ -232,7 +299,7 @@ impl LayoutSettings {
             paused_color: Color32::from_rgb(122, 122, 122),
             text_outline_color: Color32::TRANSPARENT,
             shadows_color: Color32::from_rgba_unmultiplied(0, 0, 0, 128),
-            background_gradient: GradientType::Plain,
+            background_type: BackgroundType::SolidColor,
             background_image: None,
             image_opacity: 1.0,
             image_blur: 0.0,
@@ -254,14 +321,12 @@ impl LayoutSettings {
 
     /// Whether the layout paints any background at all.
     pub fn has_background(&self) -> bool {
-        if self.background_image.is_some() {
-            return true;
-        }
-        match self.background_gradient {
-            GradientType::Plain | GradientType::PlainWithDeltaColor => {
-                self.background_color.a() > 0
+        match self.background_type {
+            BackgroundType::SolidColor => self.background_color.a() > 0,
+            BackgroundType::VerticalGradient | BackgroundType::HorizontalGradient => {
+                self.background_color.a() > 0 || self.background_color2.a() > 0
             }
-            _ => self.background_color.a() > 0 || self.background_color2.a() > 0,
+            BackgroundType::Image => self.background_image.is_some(),
         }
     }
 
