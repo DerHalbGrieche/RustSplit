@@ -81,6 +81,9 @@ The desktop application and integration layer:
 - `run_editor.rs` — splits/segment/comparison/attempt editor.
 - `layout_editor.rs` — component list, component settings and global theme.
 - `hotkeys.rs` — global hotkey registration and action mapping.
+- `sounds.rs` — timer sound effects: detects events by comparing timer
+  snapshots before and after each action and plays them on an audio worker
+  thread (rodio, behind the default `sounds` feature).
 
 ## Data flow
 

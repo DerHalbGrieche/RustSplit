@@ -8,6 +8,7 @@ mod hotkeys;
 mod layout_editor;
 mod niri;
 mod run_editor;
+mod sounds;
 
 use std::path::{Path, PathBuf};
 

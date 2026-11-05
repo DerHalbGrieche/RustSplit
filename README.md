@@ -9,8 +9,8 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
 > **Status:** this is an independent rewrite, not a drop-in replacement for
 > every LiveSplit plugin. Core timing, `.lss` split files, `.lsl` layouts,
 > layout components and the LiveSplit Server protocol are implemented. Racing,
-> video playback, auto-splitting runtimes, sounds and Speedrun.com integration
-> are not yet part of this rewrite.
+> video playback, auto-splitting runtimes and Speedrun.com integration are not
+> yet part of this rewrite.
 
 <p align="center">
   <img src="docs/screenshots/overlay.png" width="210" alt="RustSplit overlay"/>
@@ -52,12 +52,16 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
   only enabled when global hotkeys, the LiveSplit Server or the local control
   socket (used by compositor bindings) are active, so the timer can still be
   controlled.
+- **Sound effects** for splits, golds, personal bests, resets and other timer
+  events, like LiveSplit's Sound Settings.
 - **Transparent configuration** in `settings.toml`, recent runs and layouts.
 
 ## Building
 
 Requires a Rust toolchain (1.95+; developed with 1.97) and the usual Linux
-windowing libraries for `winit`/`glutin`.
+windowing libraries for `winit`/`glutin`. Sound effects need the ALSA
+development headers (`alsa-lib`, `libasound2-dev` on Debian/Ubuntu); build
+with `--no-default-features` to leave them out.
 
 ```bash
 cargo build --release
@@ -176,6 +180,31 @@ binds {
 Replace the bindings with ones that do not conflict with your Niri config.
 The socket lives at `$XDG_RUNTIME_DIR/rustsplit/control.sock`;
 `RUSTSPLIT_CONTROL_SOCKET` can override the path for testing.
+
+### Sounds
+
+RustSplit can play a sound file for each timer event: split, split ahead of or
+behind the comparison, best segment, undo, skip, personal best, not a personal
+best, reset, pause, resume and start. Choose the files and the volume under
+**Settings → Sounds**, where **Test** plays a file. WAV, Ogg Vorbis, MP3 and
+FLAC are supported. A split plays the most specific sound that is set: a best
+segment falls back to the ahead/behind sound, and those and the final split's
+personal best sounds fall back to the plain split sound. Like LiveSplit,
+resetting a finished run is silent.
+
+The settings are stored under `[sounds]` in `settings.toml`:
+
+```toml
+[sounds]
+volume = 80
+split = "/home/me/sounds/split.wav"
+best_segment = "/home/me/sounds/gold.ogg"
+personal_best = "/home/me/sounds/pb.mp3"
+```
+
+Files are decoded in the background and the audio device is opened the first
+time a sound plays. If there is no audio device, RustSplit logs a warning and
+carries on silently.
 
 ### Configuration
 
