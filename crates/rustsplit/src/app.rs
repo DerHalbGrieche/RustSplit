@@ -130,7 +130,7 @@ impl RustSplitApp {
                 "Right-click for the LiveSplit menu. Space starts/splits.".to_string(),
                 Instant::now(),
             )),
-            hotkeys: GlobalHotkeys::default(),
+            hotkeys: GlobalHotkeys::new(cc.egui_ctx.clone()),
             server: None,
             server_error: None,
             control,

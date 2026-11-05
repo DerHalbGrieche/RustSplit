@@ -4,6 +4,7 @@
 //! key bindings that call `rustsplit --command ...` instead; see `control.rs`.
 
 use std::collections::HashMap;
+use std::sync::mpsc::{channel, Receiver};
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -93,25 +94,34 @@ impl HotkeyAction {
 
 pub struct GlobalHotkeys {
     manager: Option<GlobalHotKeyManager>,
+    events: Receiver<GlobalHotKeyEvent>,
     actions: HashMap<u32, HotkeyAction>,
     registered: Vec<HotKey>,
     pub available: bool,
     pub error: Option<String>,
 }
 
-impl Default for GlobalHotkeys {
-    fn default() -> Self {
+impl GlobalHotkeys {
+    /// Installs the global event handler.  Hotkey presses wake the UI
+    /// immediately instead of waiting for the next idle repaint, which could
+    /// otherwise delay a start or split by up to 250 ms.
+    pub fn new(ctx: egui::Context) -> Self {
+        let (sender, events) = channel();
+        GlobalHotKeyEvent::set_event_handler(Some(move |event| {
+            if sender.send(event).is_ok() {
+                ctx.request_repaint();
+            }
+        }));
         Self {
             manager: None,
+            events,
             actions: HashMap::new(),
             registered: Vec::new(),
             available: true,
             error: None,
         }
     }
-}
 
-impl GlobalHotkeys {
     pub fn re_register(&mut self, config: &HotkeyConfig) {
         self.actions.clear();
         self.error = None;
@@ -172,7 +182,7 @@ impl GlobalHotkeys {
 
     pub fn poll(&mut self) -> Vec<HotkeyAction> {
         let mut actions = Vec::new();
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+        while let Ok(event) = self.events.try_recv() {
             if event.state == HotKeyState::Pressed {
                 if let Some(action) = self.actions.get(&event.id) {
                     actions.push(*action);
