@@ -833,11 +833,24 @@ fn every_background_type_roundtrips() {
         assert_settings_fields_eq(&reparsed.settings, settings);
     }
 
-    // An image background without an image has nothing to draw.
+    // LiveSplit shows its black window for an image background without an
+    // image, so the layout must not open see-through.
     let layout = parse_layout(background_layout_xml("Image", "").as_bytes()).unwrap();
     assert_eq!(layout.settings.background_type, BackgroundType::Image);
     assert_eq!(layout.settings.background_image, None);
-    assert!(!layout.settings.has_background());
+    assert!(layout.settings.has_background());
+    assert!(!layout.settings.transparent_background);
+    let xml = background_layout_xml("Image", "")
+        .replace("FF0F0F0F", "00000000")
+        .replace("FF2A2A2A", "00000000");
+    let layout = parse_layout(xml.as_bytes()).unwrap();
+    assert!(!layout.settings.transparent_background);
+    // RustSplit's own setting still wins.
+    let xml = background_layout_xml("Image", "").replace(
+        "<ImageOpacity>",
+        "<TransparentBackground>True</TransparentBackground><ImageOpacity>",
+    );
+    let layout = parse_layout(xml.as_bytes()).unwrap();
     assert!(layout.settings.transparent_background);
 }
 
@@ -845,7 +858,7 @@ fn every_background_type_roundtrips() {
 fn image_paths_are_only_saved_for_image_backgrounds() {
     let mut layout = default_layout();
     layout.settings.background_type = BackgroundType::Image;
-    layout.settings.background_image = Some("/tmp/background.png".into());
+    layout.settings.background_image = Some(std::path::Path::new("/tmp/background.png").into());
     let saved = layout_to_string(&layout).unwrap();
     assert!(saved.contains("<BackgroundType>Image</BackgroundType>"));
     assert!(saved.contains("<BackgroundImagePath>/tmp/background.png</BackgroundImagePath>"));

@@ -170,9 +170,21 @@ mod platform {
         }
     }
 
+    /// Prepares an accepted client socket for blocking reads and writes.
+    fn configure_client(stream: &UnixStream) -> std::io::Result<()> {
+        // On macOS and the BSDs an accepted socket inherits the listener's
+        // non-blocking mode, so the timeouts would do nothing and a command
+        // that has not arrived yet would fail the read at once.
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        stream.set_write_timeout(Some(IO_TIMEOUT))
+    }
+
     fn handle_client(mut stream: UnixStream, sender: &SyncSender<ControlRequest>, ctx: &Context) {
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+        if let Err(error) = configure_client(&stream) {
+            log::debug!("control socket could not configure the client stream: {error}");
+            return;
+        }
         let reader_stream = match stream.try_clone() {
             Ok(stream) => stream,
             Err(error) => {
@@ -253,6 +265,28 @@ mod platform {
             .read_to_string(&mut response)
             .map_err(|error| format!("could not read the command response: {error}"))?;
         Ok(response.trim_end_matches(['\r', '\n']).to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn client_sockets_wait_for_late_commands() {
+            let (server, mut client) = UnixStream::pair().unwrap();
+            // What macOS and the BSDs hand out from a non-blocking listener.
+            server.set_nonblocking(true).unwrap();
+            configure_client(&server).unwrap();
+
+            let writer = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                client.write_all(b"split\n").unwrap();
+            });
+            let mut line = String::new();
+            BufReader::new(&server).read_line(&mut line).unwrap();
+            assert_eq!(line, "split\n");
+            writer.join().unwrap();
+        }
     }
 }
 

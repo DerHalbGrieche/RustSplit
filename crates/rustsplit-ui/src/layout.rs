@@ -1,6 +1,7 @@
 //! Layout and global theme model.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::Color32;
 
@@ -219,7 +220,10 @@ pub struct LayoutSettings {
     /// `background_type` is [`BackgroundType::Image`]. It is kept while the
     /// type is something else, so switching back in the editor does not lose
     /// it; `.lsl` files keep an embedded image either way, like LiveSplit.
-    pub background_image: Option<PathBuf>,
+    ///
+    /// Shared, because an embedded image can be megabytes of base64 and the
+    /// settings are cloned while rendering.
+    pub background_image: Option<Arc<Path>>,
     /// LiveSplit's `ImageOpacity`, 0..1. LiveSplit draws the image over its
     /// black window, so this acts as brightness; see the renderer.
     pub image_opacity: f32,
@@ -326,7 +330,9 @@ impl LayoutSettings {
             BackgroundType::VerticalGradient | BackgroundType::HorizontalGradient => {
                 self.background_color.a() > 0 || self.background_color2.a() > 0
             }
-            BackgroundType::Image => self.background_image.is_some(),
+            // LiveSplit draws the image over its black window, so an image
+            // background is opaque even without an image.
+            BackgroundType::Image => true,
         }
     }
 

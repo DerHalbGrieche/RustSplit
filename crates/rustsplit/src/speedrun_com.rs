@@ -46,6 +46,11 @@ pub struct Query {
 
 impl Query {
     /// The query for the first World Record component in `layout`, if any.
+    ///
+    /// Only that component drives the lookup. A layout with several World
+    /// Record components fetches one record, and all of them show it with
+    /// the timing this lookup picked (by default the leaderboard's own),
+    /// whatever their own timing method or filters say.
     pub fn for_layout(layout: &Layout, timer: &Timer) -> Option<Self> {
         layout
             .components

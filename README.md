@@ -301,6 +301,12 @@ variable filters change. The game and category come from the splits'
 speedrun.com run id when present, otherwise from their names. Errors are
 logged and the component keeps showing the last value (or `-`).
 
+When a layout has several World Record components, only the first one drives
+the lookup: its timing method and filters pick the record, and every World
+Record component shows that record. A fetched record is shown with the
+leaderboard's timing (or the one the first component asks for), not with each
+component's own timing method.
+
 Building with `--no-default-features` leaves out the HTTP client entirely.
 
 ## LiveSplit Server

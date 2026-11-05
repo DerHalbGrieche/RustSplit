@@ -1,6 +1,8 @@
 //! Draws a complete layout.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use egui::{
     emath::TSTransform, ColorImage, Rect, TextureHandle, TextureId, TextureOptions, Ui, Vec2,
@@ -28,15 +30,55 @@ pub struct Renderer {
 
 /// The decoded layout background image and its blurred texture.
 struct Background {
-    path: PathBuf,
+    /// The layout's image file or embedded image. Embedded images have no
+    /// file and are matched by content, which is a pointer comparison as
+    /// long as the layout keeps the same `Arc`.
+    image: Arc<Path>,
+    /// The file's modification time and length when it was read, to notice
+    /// when it is replaced. `None` for embedded images and missing files.
+    stamp: Option<FileStamp>,
+    /// When `stamp` was last compared with the file, in egui time (seconds).
+    checked_at: f64,
     /// Decoded source pixels, kept so a blur change does not read and decode
-    /// the file again. `None` when the image could not be loaded, which also
-    /// stops a broken path from being retried every frame.
+    /// the file again. `None` when the image could not be loaded.
     source: Option<RgbaImage>,
+    /// Decodes that failed in a row, for the retry backoff.
+    failures: u32,
+    /// When to decode a broken image file again.
+    retry_at: f64,
     /// The blur baked into `texture`.
     blur: f32,
     texture: Option<TextureHandle>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        })
+    }
+}
+
+/// How often, in seconds, an image file is checked for changes.
+const FILE_CHECK_INTERVAL: f64 = 1.0;
+
+/// The first and the longest wait, in seconds, before decoding an image file
+/// that failed to load again. The wait doubles after every failure.
+const FIRST_RETRY_DELAY: f64 = 1.0;
+const MAX_RETRY_DELAY: f64 = 60.0;
+
+/// Upper bound for the long side of the decoded image and of its texture, so
+/// a huge image neither keeps hundreds of megabytes around nor exceeds what
+/// the GPU accepts.
+const MAX_BACKGROUND_SIDE: u32 = 4096;
 
 impl Default for Renderer {
     fn default() -> Self {
@@ -68,25 +110,63 @@ impl Renderer {
             .max(1.0)
     }
 
-    /// Load the background texture, decoding only when the path changes and
-    /// blurring only when the path or the blur setting changes. Returns the
-    /// texture and the source image size; the size is used for the aspect
-    /// ratio because large blurs are baked into a downscaled texture.
+    /// Load the background texture, decoding only when the image or its file
+    /// changes and blurring only when the image or the blur setting changes.
+    /// Returns the texture and the source image size; the size is used for
+    /// the aspect ratio because large blurs are baked into a downscaled
+    /// texture.
     fn ensure_background(
         &mut self,
         ctx: &egui::Context,
-        path: &PathBuf,
+        image: &Arc<Path>,
         blur: f32,
     ) -> Option<(TextureId, Vec2)> {
         let blur = effective_blur(blur);
-        if self
-            .background
-            .as_ref()
-            .is_none_or(|background| background.path != *path)
-        {
+        let (now, max_texture_side) = ctx.input(|input| (input.time, input.max_texture_side));
+        let embedded = is_embedded(image);
+        // `Some(failures so far)` when the image has to be decoded.
+        let reload = match &mut self.background {
+            Some(background)
+                if Arc::ptr_eq(&background.image, image)
+                    || background.image.as_os_str() == image.as_os_str() =>
+            {
+                // A reloaded layout has a new `Arc` for the same image; keep
+                // it so the next frames compare pointers only.
+                if !Arc::ptr_eq(&background.image, image) {
+                    background.image = Arc::clone(image);
+                }
+                // Files can be replaced, so check them now and then, and give
+                // a broken one another chance after a while.
+                if !embedded && now - background.checked_at >= FILE_CHECK_INTERVAL {
+                    background.checked_at = now;
+                    let changed = FileStamp::of(image) != background.stamp;
+                    (changed || now >= background.retry_at).then_some(background.failures)
+                } else {
+                    None
+                }
+            }
+            _ => Some(0),
+        };
+        if let Some(failures) = reload {
+            // Read the stamp first: a change during the decode is then
+            // noticed by the next check.
+            let stamp = if embedded { None } else { FileStamp::of(image) };
+            let source = decode_background(image)
+                .map(|source| fit_within(&source, MAX_BACKGROUND_SIDE).unwrap_or(source));
+            let failures = if source.is_some() { 0 } else { failures + 1 };
+            // An embedded image cannot change, so retrying it is pointless.
+            let retry_at = if source.is_some() || embedded {
+                f64::INFINITY
+            } else {
+                now + (FIRST_RETRY_DELAY * 2f64.powi(failures as i32 - 1)).min(MAX_RETRY_DELAY)
+            };
             self.background = Some(Background {
-                path: path.clone(),
-                source: decode_background(path),
+                image: Arc::clone(image),
+                stamp,
+                checked_at: now,
+                source,
+                failures,
+                retry_at,
                 blur,
                 texture: None,
             });
@@ -97,7 +177,7 @@ impl Renderer {
             background.blur = blur;
             background.texture = Some(ctx.load_texture(
                 "rustsplit-background",
-                background_pixels(source, blur),
+                background_pixels(source, blur, max_texture_side),
                 TextureOptions::LINEAR,
             ));
         }
@@ -159,10 +239,14 @@ impl Renderer {
 
         let gradient = layout.settings.background_type.gradient();
         let background_texture = match &layout.settings.background_image {
-            Some(path) if gradient.is_none() => {
-                self.ensure_background(ui.ctx(), path, layout.settings.image_blur)
+            Some(image) if gradient.is_none() => {
+                self.ensure_background(ui.ctx(), image, layout.settings.image_blur)
             }
-            _ => None,
+            _ => {
+                // Free the decoded image and its texture.
+                self.background = None;
+                None
+            }
         };
         let image_opacity = layout.settings.image_opacity.clamp(0.0, 1.0);
         let icons = &mut self.icons;
@@ -330,6 +414,29 @@ fn effective_blur(blur: f32) -> f32 {
     }
 }
 
+/// Runs every frame, so it looks at the prefix only; an embedded image can be
+/// megabytes long.
+fn is_embedded(image: &Path) -> bool {
+    image
+        .as_os_str()
+        .as_encoded_bytes()
+        .starts_with(EMBEDDED_IMAGE_PREFIX.as_bytes())
+}
+
+/// `image` shrunk to at most `max_side` pixels on its long side, keeping the
+/// aspect ratio, or `None` when it already fits.
+fn fit_within(image: &RgbaImage, max_side: u32) -> Option<RgbaImage> {
+    let longest = image.width().max(image.height());
+    (longest > max_side).then(|| downscale(image, max_side as f32 / longest as f32, max_side))
+}
+
+/// Scales `image` by `scale` (below 1) with an area-averaging filter, so no
+/// detail aliases. No side ends up longer than `max_side` or shorter than 1.
+fn downscale(image: &RgbaImage, scale: f32, max_side: u32) -> RgbaImage {
+    let scaled = |side: u32| ((side as f32 * scale).round() as u32).clamp(1, max_side.max(1));
+    image::imageops::thumbnail(image, scaled(image.width()), scaled(image.height()))
+}
+
 fn decode_background(path: &Path) -> Option<RgbaImage> {
     let path_text = path.to_string_lossy();
     let bytes = if let Some(encoded) = path_text.strip_prefix(EMBEDDED_IMAGE_PREFIX) {
@@ -373,25 +480,29 @@ fn dotnet_bitmap_data(blob: &[u8]) -> Option<&[u8]> {
 }
 
 /// Build the background texture pixels with the blur applied. This runs once
-/// per image or blur change, never per frame.
-fn background_pixels(source: &RgbaImage, blur: f32) -> ColorImage {
+/// per image or blur change, never per frame. The long side never exceeds
+/// `max_texture_side` (the GPU limit, which egui asserts) or
+/// [`MAX_BACKGROUND_SIDE`].
+fn background_pixels(source: &RgbaImage, blur: f32, max_texture_side: usize) -> ColorImage {
+    let max_side = MAX_BACKGROUND_SIDE.min(max_texture_side.try_into().unwrap_or(u32::MAX));
     let (width, height) = source.dimensions();
     let longest = width.max(height) as f32;
     let sigma = BLUR_FACTOR * effective_blur(blur) * longest;
     // Sub-pixel blurs are invisible; skip the work.
     if sigma < 0.5 {
+        let fitted = fit_within(source, max_side);
+        let image = fitted.as_ref().unwrap_or(source);
         return ColorImage::from_rgba_unmultiplied(
-            [width as usize, height as usize],
-            source.as_raw(),
+            [image.width() as usize, image.height() as usize],
+            image.as_raw(),
         );
     }
 
     let scale = (MAX_BLUR_SIGMA / sigma)
-        .min(MAX_BLURRED_SIZE / longest)
+        .min(MAX_BLURRED_SIZE.min(max_side as f32) / longest)
         .min(1.0);
     let mut working = if scale < 1.0 {
-        let scaled = |side: u32| ((side as f32 * scale).round() as u32).max(1);
-        image::imageops::thumbnail(source, scaled(width), scaled(height))
+        downscale(source, scale, max_side)
     } else {
         source.clone()
     };
@@ -578,6 +689,9 @@ mod tests {
         assert_eq!(clip_rect.size(), size);
     }
 
+    /// A typical `GL_MAX_TEXTURE_SIZE`, large enough not to matter.
+    const GPU_LIMIT: usize = 16384;
+
     /// A black image with a one pixel white vertical line in the middle.
     fn line_image(size: u32) -> RgbaImage {
         RgbaImage::from_fn(size, size, |x, _| {
@@ -599,7 +713,7 @@ mod tests {
             image::Rgba([x as u8 * 30, y as u8 * 60, 7, 255])
         });
         for blur in [0.0, -1.0, f32::NAN] {
-            let pixels = background_pixels(&source, blur);
+            let pixels = background_pixels(&source, blur, GPU_LIMIT);
             assert_eq!(pixels.size, [8, 4]);
             assert_eq!(pixels.pixels[9], egui::Color32::from_rgb(30, 60, 7));
         }
@@ -608,14 +722,14 @@ mod tests {
     #[test]
     fn blur_is_relative_to_the_image_size() {
         // sigma = 0.05 * 0.4 * 100 = 2 px, small enough to blur at full size.
-        let small = background_pixels(&line_image(100), 0.4);
+        let small = background_pixels(&line_image(100), 0.4, GPU_LIMIT);
         assert_eq!(small.size, [100, 100]);
         assert!(red_at(&small, 50, 50) < 255);
         assert!(red_at(&small, 52, 50) > 0);
         assert_eq!(red_at(&small, 70, 50), 0);
 
         // The same setting on an image twice as large spreads twice as far.
-        let large = background_pixels(&line_image(200), 0.4);
+        let large = background_pixels(&line_image(200), 0.4, GPU_LIMIT);
         assert!(red_at(&large, 104, 100) > red_at(&small, 54, 50));
         assert!(red_at(&large, 100, 100) < red_at(&small, 50, 50));
     }
@@ -626,7 +740,7 @@ mod tests {
         let source = RgbaImage::from_pixel(4000, 2000, color);
         // sigma = 0.05 * 1.0 * 4000 = 200 px, so the image is scaled by
         // MAX_BLUR_SIGMA / 200 before blurring.
-        let pixels = background_pixels(&source, 1.0);
+        let pixels = background_pixels(&source, 1.0, GPU_LIMIT);
         assert_eq!(pixels.size, [80, 40]);
         // Edges are clamped, so a uniform image stays uniform.
         assert!(pixels.pixels.iter().all(|pixel| {
@@ -638,7 +752,7 @@ mod tests {
         }));
 
         // Small blurs on huge images are capped as well.
-        let pixels = background_pixels(&RgbaImage::new(8192, 1024), 0.01);
+        let pixels = background_pixels(&RgbaImage::new(8192, 1024), 0.01, GPU_LIMIT);
         assert_eq!(pixels.size, [2048, 256]);
     }
 
@@ -652,7 +766,7 @@ mod tests {
                 image::Rgba([0, 0, 255, 255])
             }
         });
-        let pixels = background_pixels(&source, 0.5);
+        let pixels = background_pixels(&source, 0.5, GPU_LIMIT);
         assert!(pixels.pixels.iter().all(|pixel| pixel.r() == 0));
         assert!(pixels.pixels[31].a() > 0, "blue should blur into the gap");
     }
@@ -669,29 +783,13 @@ mod tests {
         let mut layout = Layout::default();
         layout.settings.background_type = BackgroundType::Image;
         layout.settings.background_image =
-            Some(PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}")));
+            Some(Path::new(&format!("{EMBEDDED_IMAGE_PREFIX}{encoded}")).into());
         layout.settings.transparent_background = false;
         let timer = timer();
         let ctx = Context::default();
         let mut renderer = Renderer::default();
-        // Count uploads of textures other than egui's font atlas.
         let mut uploads = |layout: &Layout| {
-            let mut output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 300.0))),
-                    ..Default::default()
-                },
-                |ui| renderer.draw(ui, layout, &timer),
-            );
-            let count = output
-                .textures_delta
-                .set
-                .iter()
-                .filter(|(id, _)| **id != egui::TextureId::default())
-                .filter(|(_, deltas)| deltas.iter().any(|delta| delta.pos.is_none()))
-                .count();
-            output.textures_delta.clear();
-            count
+            background_uploads(&ctx, &mut renderer, layout, &timer, RawInput::default()).len()
         };
 
         assert_eq!(uploads(&layout), 1);
@@ -699,6 +797,195 @@ mod tests {
         layout.settings.image_blur = 0.5;
         assert_eq!(uploads(&layout), 1, "a new blur must rebuild the texture");
         assert_eq!(uploads(&layout), 0);
+
+        // A reloaded layout holds a new copy of the same embedded image.
+        let mut reloaded = layout.clone();
+        reloaded.settings.background_image = layout
+            .settings
+            .background_image
+            .as_deref()
+            .map(|image| Path::new(image.as_os_str()).into());
+        assert_eq!(
+            uploads(&reloaded),
+            0,
+            "the same image must not be decoded again"
+        );
+    }
+
+    /// Draws one frame and returns the sizes of the textures uploaded from
+    /// scratch, other than egui's font atlas.
+    fn background_uploads(
+        ctx: &Context,
+        renderer: &mut Renderer,
+        layout: &Layout,
+        timer: &Timer,
+        input: RawInput,
+    ) -> Vec<[usize; 2]> {
+        let mut output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 300.0))),
+                ..input
+            },
+            |ui| renderer.draw(ui, layout, timer),
+        );
+        let sizes = output
+            .textures_delta
+            .set
+            .iter()
+            .filter(|(id, _)| **id != egui::TextureId::default())
+            .flat_map(|(_, deltas)| deltas.iter())
+            .filter(|delta| delta.pos.is_none())
+            .map(|delta| delta.image.size())
+            .collect();
+        output.textures_delta.clear();
+        sizes
+    }
+
+    struct TestDir(std::path::PathBuf);
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "rustsplit-render-test-{name}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_png(path: &Path, width: u32, height: u32) {
+        RgbaImage::from_pixel(width, height, image::Rgba([40, 80, 120, 255]))
+            .save_with_format(path, image::ImageFormat::Png)
+            .unwrap();
+    }
+
+    fn image_layout(image: &Path) -> Layout {
+        let mut layout = Layout::default();
+        layout.settings.background_type = BackgroundType::Image;
+        layout.settings.background_image = Some(image.into());
+        layout.settings.transparent_background = false;
+        layout
+    }
+
+    #[test]
+    fn huge_unblurred_images_fit_the_texture_limit() {
+        // A panorama far wider than any GPU texture.
+        let pixels = background_pixels(&RgbaImage::new(10000, 500), 0.0, GPU_LIMIT);
+        assert_eq!(pixels.size, [4096, 205]);
+        let pixels = background_pixels(&RgbaImage::new(500, 10000), 0.0, 1024);
+        assert_eq!(pixels.size, [51, 1024]);
+        // The blur path honors a GPU limit below its own cap too.
+        let pixels = background_pixels(&RgbaImage::new(8192, 1024), 0.01, 1024);
+        assert_eq!(pixels.size, [1024, 128]);
+        // Images that fit are left alone.
+        assert_eq!(
+            background_pixels(&RgbaImage::new(1024, 1), 0.0, 1024).size,
+            [1024, 1]
+        );
+
+        let dir = TestDir::new("huge");
+        let path = dir.0.join("wide.png");
+        write_png(&path, 5000, 500);
+        let ctx = Context::default();
+        let mut renderer = Renderer::default();
+        let input = RawInput {
+            max_texture_side: Some(2048),
+            ..Default::default()
+        };
+        let uploads =
+            background_uploads(&ctx, &mut renderer, &image_layout(&path), &timer(), input);
+        assert_eq!(uploads, [[2048, 205]]);
+    }
+
+    #[test]
+    fn background_files_are_reloaded_when_they_change() {
+        let dir = TestDir::new("reload");
+        let path = dir.0.join("background.png");
+        let layout = image_layout(&path);
+        let timer = timer();
+        let ctx = Context::default();
+        let mut renderer = Renderer::default();
+        let uploads = |renderer: &mut Renderer, time: f64| {
+            let input = RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            background_uploads(&ctx, renderer, &layout, &timer, input)
+        };
+        let r = &mut renderer;
+
+        // A missing file is retried after a backoff, not every frame.
+        assert!(uploads(r, 0.0).is_empty());
+        write_png(&path, 8, 4);
+        assert!(uploads(r, 0.5).is_empty(), "too early to look again");
+        assert_eq!(uploads(r, 1.5), [[8, 4]]);
+
+        // A replaced file is noticed on the next check.
+        write_png(&path, 6, 3);
+        assert!(
+            uploads(r, 1.6).is_empty(),
+            "files are checked about once a second"
+        );
+        assert_eq!(uploads(r, 2.6), [[6, 3]]);
+        assert!(
+            uploads(r, 4.0).is_empty(),
+            "an unchanged file is not decoded again"
+        );
+
+        // A broken file waits longer after every failure.
+        std::fs::write(&path, b"not an image").unwrap();
+        assert!(uploads(r, 5.0).is_empty());
+        let background = r.background.as_ref().unwrap();
+        assert!(background.source.is_none());
+        assert_eq!(background.retry_at, 6.0);
+        assert!(uploads(r, 6.0).is_empty());
+        assert_eq!(r.background.as_ref().unwrap().retry_at, 8.0);
+    }
+
+    #[test]
+    fn background_is_freed_when_no_image_is_drawn() {
+        let dir = TestDir::new("free");
+        let path = dir.0.join("background.png");
+        write_png(&path, 8, 4);
+        let mut layout = image_layout(&path);
+        let timer = timer();
+        let ctx = Context::default();
+        let mut renderer = Renderer::default();
+        let frame = |layout: &Layout, renderer: &mut Renderer| {
+            background_uploads(&ctx, renderer, layout, &timer, RawInput::default()).len()
+        };
+
+        assert_eq!(frame(&layout, &mut renderer), 1);
+        assert!(renderer.background.is_some());
+        layout.settings.background_type = BackgroundType::VerticalGradient;
+        frame(&layout, &mut renderer);
+        assert!(renderer.background.is_none());
+        layout.settings.background_type = BackgroundType::Image;
+        layout.settings.background_image = None;
+        assert_eq!(frame(&layout, &mut renderer), 0);
+        assert!(renderer.background.is_none());
+    }
+
+    #[test]
+    fn image_background_without_an_image_is_black() {
+        let mut layout = Layout::default();
+        layout.settings.background_type = BackgroundType::Image;
+        layout.settings.background_image = None;
+        layout.settings.transparent_background = false;
+        let (_, shapes) = render(&layout, &timer(), vec2(300.0, 500.0));
+        assert!(shapes.iter().any(|(_, shape)| matches!(
+            shape,
+            egui::Shape::Rect(rect)
+                if rect.fill == egui::Color32::BLACK && rect.rect.size() == vec2(300.0, 500.0)
+        )));
     }
 
     /// What .NET's `BinaryFormatter` writes for a `System.Drawing.Bitmap`
@@ -750,8 +1037,8 @@ mod tests {
 
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&blob);
-        let path = PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}"));
-        let image = decode_background(&path).expect("the embedded bitmap must decode");
+        let path = format!("{EMBEDDED_IMAGE_PREFIX}{encoded}");
+        let image = decode_background(Path::new(&path)).expect("the embedded bitmap must decode");
         assert_eq!(image.dimensions(), (16, 16));
     }
 }
