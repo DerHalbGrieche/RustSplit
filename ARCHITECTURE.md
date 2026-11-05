@@ -61,9 +61,10 @@ reused by another frontend.
 ## rustsplit-server
 
 A `std::net` TCP server. Each client thread parses newline-delimited commands
-and sends `ServerRequest`s over a channel. The app polls the channel, mutates
-the timer on the UI thread, and sends the optional response back. This keeps
-all timer mutation on one thread.
+and sends `ServerRequest`s over a channel. An optional notifier wakes the app
+when a request is queued; the app drains the channel, mutates the timer on the
+UI thread, and sends the optional response back. This keeps all timer mutation
+on one thread. Concurrent clients and line lengths are capped.
 
 ## rustsplit (binary)
 

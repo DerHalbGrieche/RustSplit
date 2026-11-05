@@ -243,6 +243,12 @@ impl NiriIntegration {
         self.applied
     }
 
+    /// Whether [`Self::poll`] still has work to do, i.e. the window is neither
+    /// configured yet nor given up on.
+    pub fn is_probing(&self) -> bool {
+        !self.applied && !self.gave_up
+    }
+
     /// Move the overlay to the floating layout and restore its geometry.
     ///
     /// This is called once per frame until the window is found and configured.
