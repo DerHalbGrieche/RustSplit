@@ -848,7 +848,9 @@ impl RustSplitApp {
         if outcome.save {
             let _ = self.save_current_run(false);
         }
-        if autosave {
+        // Like keyboard input, only save once the attempt is over: saving
+        // mid-run would fsync on the UI thread on every remote split.
+        if autosave && !matches!(self.timer.phase, TimerPhase::Running | TimerPhase::Paused) {
             self.autosave_after_change();
         }
         if outcome.quit {
