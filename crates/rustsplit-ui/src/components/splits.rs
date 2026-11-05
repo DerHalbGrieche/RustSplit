@@ -1441,12 +1441,12 @@ pub fn draw_splits(ui: &mut Ui, rect: Rect, ctx: &mut ComponentContext, settings
     };
     let (rows, last_row) = build_split_rows(settings, segment_count, current);
     let reserve_icon = settings.display_icons
-        && ctx.timer.run.segments.iter().any(|segment| {
-            segment
-                .icon
-                .as_deref()
-                .is_some_and(|icon| !icon.is_empty())
-        });
+        && ctx
+            .timer
+            .run
+            .segments
+            .iter()
+            .any(|segment| segment.icon.as_deref().is_some_and(|icon| !icon.is_empty()));
     let active_phase = matches!(ctx.timer.phase, TimerPhase::Running | TimerPhase::Paused);
 
     for (visible_index, row_segment) in rows.iter().take(available_rows).enumerate() {
@@ -2161,12 +2161,12 @@ pub fn draw_subsplits(
     }
 
     let reserve_icon = settings.splits.display_icons
-        && ctx.timer.run.segments.iter().any(|segment| {
-            segment
-                .icon
-                .as_deref()
-                .is_some_and(|icon| !icon.is_empty())
-        });
+        && ctx
+            .timer
+            .run
+            .segments
+            .iter()
+            .any(|segment| segment.icon.as_deref().is_some_and(|icon| !icon.is_empty()));
     let active_phase = matches!(ctx.timer.phase, TimerPhase::Running | TimerPhase::Paused);
 
     for (visible_index, sub_row) in rows.iter().take(available_rows).enumerate() {
