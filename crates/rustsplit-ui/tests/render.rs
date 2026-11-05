@@ -281,7 +281,8 @@ fn image_background_layout(background_type: BackgroundType) -> Layout {
     layout.settings.background_color = Color32::RED;
     layout.settings.background_color2 = Color32::RED;
     layout.settings.background_type = background_type;
-    layout.settings.background_image = Some(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}").into());
+    layout.settings.background_image =
+        Some(std::path::Path::new(&format!("{EMBEDDED_IMAGE_PREFIX}{encoded}")).into());
     layout.settings.image_opacity = 0.75;
     layout.settings.transparent_background = false;
     layout

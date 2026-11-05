@@ -471,7 +471,10 @@ fn accept_loop(
                     let _ = stream.shutdown(Shutdown::Both);
                     continue;
                 };
-                let _ = stream.set_nodelay(true);
+                if let Err(error) = configure_client(&stream) {
+                    log::warn!("[server] dropping connection from {peer}: {error}");
+                    continue;
+                }
                 log::debug!("[server] accepted connection from {peer}");
                 let client_shared = shared.clone();
                 if let Err(error) = thread::Builder::new()
@@ -496,9 +499,20 @@ fn accept_loop(
     }
 }
 
+/// Prepares an accepted client socket for the blocking client loop.
+fn configure_client(stream: &TcpStream) -> std::io::Result<()> {
+    // On macOS, the BSDs and Windows an accepted socket inherits the
+    // listener's non-blocking mode. The timeouts below would then do nothing:
+    // reads fail with `WouldBlock` at once, which spins the client loop, and
+    // writes can fail half way through a response.
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(RESPONSE_TIMEOUT))?;
+    let _ = stream.set_nodelay(true);
+    Ok(())
+}
+
 fn client_loop(stream: TcpStream, shared: &ClientShared) {
-    let _ = stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(RESPONSE_TIMEOUT));
     let reader_stream = match stream.try_clone() {
         Ok(stream) => stream,
         Err(error) => {
@@ -1565,5 +1579,25 @@ mod tests {
         .join();
         assert!(result.is_err());
         assert_eq!(clients.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn client_sockets_block_even_if_accepted_non_blocking() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        // What macOS, the BSDs and Windows hand out from a non-blocking
+        // listener.
+        stream.set_nonblocking(true).unwrap();
+
+        configure_client(&stream).unwrap();
+        let started = Instant::now();
+        let error = (&stream).read(&mut [0; 16]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+            "{error}"
+        );
+        // The read waited for the timeout instead of failing at once.
+        assert!(started.elapsed() >= CLIENT_READ_TIMEOUT / 2);
     }
 }

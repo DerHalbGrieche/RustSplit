@@ -51,7 +51,7 @@
 //! read as `Image` when those colors let the image show through, so they keep
 //! their look.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use base64::Engine;
 use thiserror::Error;
@@ -249,11 +249,12 @@ fn parse_layout_settings(
     settings.background_type = parse_background_type(element, version, settings.background_type);
     let transparent = value("TransparentBackground");
     if let Some(raw) = child_text(element, "BackgroundImage").filter(|raw| !raw.is_empty()) {
-        settings.background_image = Some(PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{raw}")));
+        settings.background_image =
+            Some(Path::new(&format!("{EMBEDDED_IMAGE_PREFIX}{raw}")).into());
     } else if let Some(path) =
         child_text(element, "BackgroundImagePath").filter(|path| !path.is_empty())
     {
-        settings.background_image = Some(PathBuf::from(path));
+        settings.background_image = Some(Path::new(&path).into());
         // Older RustSplit wrote the path next to a color type and painted the
         // colors over the image (nothing in transparent mode).  Keep what
         // those layouts showed: the image wherever the colors let it through.
@@ -268,7 +269,9 @@ fn parse_layout_settings(
     settings.image_blur = parse_f32(value("ImageBlur").as_deref(), settings.image_blur);
     // RustSplit extension.  Older layouts without it are treated as
     // transparent when they do not paint a background, so their text gets the
-    // high-contrast treatment automatically.
+    // high-contrast treatment automatically.  LiveSplit layouts never have
+    // it; an image background there is opaque even without an image, as
+    // LiveSplit draws its black window behind it.
     settings.transparent_background =
         parse_bool(transparent.as_deref(), !settings.has_background());
     if let Some(font) = child(element, "TimerFont") {

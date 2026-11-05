@@ -83,8 +83,9 @@ impl LayoutEditor {
         draft
             .settings
             .background_image
-            .clone()
+            .as_deref()
             .filter(|path| !is_embedded(path))
+            .map(Path::to_path_buf)
             .or_else(|| draft.file_path.clone())
     }
 
@@ -92,7 +93,7 @@ impl LayoutEditor {
     pub fn set_background_image(&mut self, path: PathBuf) {
         self.picking_image = false;
         if let Some(draft) = self.draft.as_mut() {
-            draft.settings.background_image = Some(path);
+            draft.settings.background_image = Some(path.into());
             draft.settings.background_type = BackgroundType::Image;
         }
     }
@@ -466,7 +467,7 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) -> bool 
                                 settings.background_image = if path.trim().is_empty() {
                                     None
                                 } else {
-                                    Some(path.into())
+                                    Some(Path::new(&path).into())
                                 };
                             }
                         }
