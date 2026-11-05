@@ -7,9 +7,11 @@ mod control;
 mod file_dialog;
 mod file_dialogs;
 mod hotkeys;
+mod input;
 mod layout_editor;
 mod niri;
 mod run_editor;
+mod settings_window;
 mod sounds;
 #[cfg(feature = "speedrun-com")]
 mod speedrun_com;
@@ -56,7 +58,12 @@ struct Args {
 }
 
 fn main() -> eframe::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let mut logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    if let Some(directive) = rfd_log_directive(std::env::var("RUST_LOG").ok().as_deref()) {
+        logger.parse_filters(directive);
+    }
+    logger.init();
     let args = Args::parse();
 
     if let Some(command) = args.command.as_deref() {
@@ -103,6 +110,24 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// rfd only reports why a system file dialog could not be shown (no portal,
+/// no zenity, a D-Bus error) in its log. Keep its warnings and errors on when
+/// `RUST_LOG` neither sets a global level nor mentions rfd, e.g.
+/// `RUST_LOG=rustsplit=debug`. The default filter (`info`) already has them.
+fn rfd_log_directive(rust_log: Option<&str>) -> Option<&'static str> {
+    let filter = rust_log?.split('/').next()?.trim();
+    if filter.is_empty() {
+        return None;
+    }
+    let covered = filter.split(',').map(str::trim).any(|directive| {
+        directive.parse::<log::LevelFilter>().is_ok()
+            || directive == "rfd"
+            || directive.starts_with("rfd=")
+            || directive.starts_with("rfd::")
+    });
+    (!covered).then_some("rfd=warn")
+}
+
 fn load_icon() -> Option<egui::IconData> {
     let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon.png"));
     let image = image::load_from_memory(bytes).ok()?.to_rgba8();
@@ -140,4 +165,24 @@ pub fn run_with_paths(
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rfd_log_directive;
+
+    #[test]
+    fn rfd_warnings_stay_visible() {
+        assert_eq!(rfd_log_directive(None), None);
+        assert_eq!(rfd_log_directive(Some("")), None);
+        assert_eq!(rfd_log_directive(Some("debug")), None);
+        assert_eq!(rfd_log_directive(Some("off")), None);
+        assert_eq!(rfd_log_directive(Some("rustsplit=debug,rfd=off")), None);
+        assert_eq!(rfd_log_directive(Some("rustsplit=debug, rfd")), None);
+        assert_eq!(rfd_log_directive(Some("rustsplit=debug")), Some("rfd=warn"));
+        assert_eq!(
+            rfd_log_directive(Some("rustsplit=trace,rfdx=info/split")),
+            Some("rfd=warn")
+        );
+    }
 }

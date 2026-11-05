@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver};
+use std::time::Instant;
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -94,7 +95,8 @@ impl HotkeyAction {
 
 pub struct GlobalHotkeys {
     manager: Option<GlobalHotKeyManager>,
-    events: Receiver<GlobalHotKeyEvent>,
+    /// Events with the moment they arrived.
+    events: Receiver<(GlobalHotKeyEvent, Instant)>,
     actions: HashMap<u32, HotkeyAction>,
     registered: Vec<HotKey>,
     pub available: bool,
@@ -102,13 +104,14 @@ pub struct GlobalHotkeys {
 }
 
 impl GlobalHotkeys {
-    /// Installs the global event handler.  Hotkey presses wake the UI
-    /// immediately instead of waiting for the next idle repaint, which could
-    /// otherwise delay a start or split by up to 250 ms.
+    /// Installs the global event handler.  Hotkey presses wake the app
+    /// immediately instead of waiting for the next idle repaint, and are
+    /// timestamped here, so the action is applied at the moment of the press
+    /// even when the app handles it later (e.g. while minimized).
     pub fn new(ctx: egui::Context) -> Self {
         let (sender, events) = channel();
         GlobalHotKeyEvent::set_event_handler(Some(move |event| {
-            if sender.send(event).is_ok() {
+            if sender.send((event, Instant::now())).is_ok() {
                 ctx.request_repaint();
             }
         }));
@@ -180,15 +183,47 @@ impl GlobalHotkeys {
         }
     }
 
-    pub fn poll(&mut self) -> Vec<HotkeyAction> {
-        let mut actions = Vec::new();
-        while let Ok(event) = self.events.try_recv() {
-            if event.state == HotKeyState::Pressed {
-                if let Some(action) = self.actions.get(&event.id) {
-                    actions.push(*action);
-                }
-            }
-        }
-        actions
+    /// The actions of the hotkeys pressed since the last poll, with the
+    /// moment each was pressed.
+    pub fn poll(&mut self) -> Vec<(HotkeyAction, Instant)> {
+        pressed_actions(self.events.try_iter(), &self.actions)
+    }
+}
+
+fn pressed_actions(
+    events: impl Iterator<Item = (GlobalHotKeyEvent, Instant)>,
+    actions: &HashMap<u32, HotkeyAction>,
+) -> Vec<(HotkeyAction, Instant)> {
+    events
+        .filter(|(event, _)| event.state == HotKeyState::Pressed)
+        .filter_map(|(event, pressed)| Some((*actions.get(&event.id)?, pressed)))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn presses_keep_their_timestamps() {
+        let actions = HashMap::from([(1, HotkeyAction::StartSplit), (2, HotkeyAction::Reset)]);
+        let first = Instant::now();
+        let second = first + Duration::from_millis(30);
+        let event = |id, state| GlobalHotKeyEvent { id, state };
+        let events = [
+            (event(1, HotKeyState::Pressed), first),
+            (event(1, HotKeyState::Released), first),
+            (event(3, HotKeyState::Pressed), first),
+            (event(2, HotKeyState::Pressed), second),
+        ];
+        assert_eq!(
+            pressed_actions(events.into_iter(), &actions),
+            vec![
+                (HotkeyAction::StartSplit, first),
+                (HotkeyAction::Reset, second)
+            ]
+        );
     }
 }

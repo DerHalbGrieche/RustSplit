@@ -226,7 +226,8 @@ impl SoundPlayer {
     }
 
     /// Decode the configured files in the background so that the first play
-    /// doesn't wait for the decoder.
+    /// doesn't wait for the decoder. Files that are no longer configured are
+    /// dropped from the cache.
     pub fn preload(&mut self, config: &SoundConfig) {
         let paths: Vec<PathBuf> = SoundEvent::ALL
             .into_iter()
@@ -234,8 +235,14 @@ impl SoundPlayer {
             .map(Path::to_path_buf)
             .collect();
         #[cfg(feature = "sounds")]
-        if !paths.is_empty() {
-            if let Some(backend) = self.backend() {
+        {
+            // Without a worker there is no cache to clear.
+            let backend = if paths.is_empty() {
+                self.backend.as_ref()
+            } else {
+                self.backend()
+            };
+            if let Some(backend) = backend {
                 backend.send(backend::Command::Preload(paths));
             }
         }
@@ -336,7 +343,7 @@ pub fn settings_ui(
 
 #[cfg(feature = "sounds")]
 mod backend {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -348,10 +355,12 @@ mod backend {
     use rodio::source::UniformSourceIterator;
     use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 
-    /// Longer files are cut off so a mistaken choice can't fill memory.
-    const MAX_DURATION: Duration = Duration::from_secs(300);
+    /// Longer files are cut off so a mistaken choice can't fill memory (30 s
+    /// of 48 kHz stereo are about 11 MB of samples).
+    const MAX_DURATION: Duration = Duration::from_secs(30);
 
     pub enum Command {
+        /// The configured files: decode them now and forget all others.
         Preload(Vec<PathBuf>),
         Play(PathBuf, f32),
     }
@@ -403,7 +412,10 @@ mod backend {
 
     struct Worker {
         device: Device,
+        /// Decoded configured files. Other files (the Settings window's
+        /// "Test" button) are decoded for every play instead.
         cache: HashMap<PathBuf, Cached>,
+        configured: HashSet<PathBuf>,
     }
 
     impl Default for Worker {
@@ -411,6 +423,7 @@ mod backend {
             Self {
                 device: Device::Closed,
                 cache: HashMap::new(),
+                configured: HashSet::new(),
             }
         }
     }
@@ -419,11 +432,7 @@ mod backend {
         fn run(mut self, receiver: Receiver<Command>, device_unavailable: &AtomicBool) {
             while let Ok(command) = receiver.recv() {
                 match command {
-                    Command::Preload(paths) => {
-                        for path in paths {
-                            self.samples(&path);
-                        }
-                    }
+                    Command::Preload(paths) => self.preload(paths),
                     Command::Play(path, volume) => {
                         let Some(samples) = self.samples(&path) else {
                             continue;
@@ -456,6 +465,15 @@ mod backend {
             }
         }
 
+        fn preload(&mut self, paths: Vec<PathBuf>) {
+            self.configured = paths.into_iter().collect();
+            let configured = &self.configured;
+            self.cache.retain(|path, _| configured.contains(path));
+            for path in self.configured.clone() {
+                self.samples(&path);
+            }
+        }
+
         /// Decoded samples for `path`, decoding it again if the file changed.
         fn samples(&mut self, path: &Path) -> Option<SamplesBuffer> {
             let modified = std::fs::metadata(path)
@@ -473,6 +491,9 @@ mod backend {
                     None
                 }
             };
+            if !self.configured.contains(path) {
+                return samples;
+            }
             self.cache.insert(
                 path.to_path_buf(),
                 Cached {
@@ -534,14 +555,45 @@ mod backend {
             std::fs::write(&path, wav(800)).unwrap();
 
             let mut worker = Worker::default();
+            worker.preload(vec![path.clone()]);
+            assert!(worker.cache.contains_key(&path));
             let samples = worker.samples(&path).expect("the WAV file should decode");
             assert_eq!(samples.channels().get(), 1);
             assert_eq!(samples.sample_rate().get(), 8000);
             assert_eq!(samples.count(), 800);
-            assert!(worker.cache.contains_key(&path));
 
             let missing = directory.join("missing.wav");
             assert!(worker.samples(&missing).is_none());
+            let _ = std::fs::remove_dir_all(directory);
+        }
+
+        #[test]
+        fn only_configured_files_stay_cached() {
+            let directory = std::env::temp_dir().join(format!(
+                "rustsplit-sounds-evict-test-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory).unwrap();
+            let split = directory.join("split.wav");
+            let reset = directory.join("reset.wav");
+            let test = directory.join("test.wav");
+            for path in [&split, &reset, &test] {
+                std::fs::write(path, wav(80)).unwrap();
+            }
+
+            let mut worker = Worker::default();
+            worker.preload(vec![split.clone(), reset.clone()]);
+            assert_eq!(worker.cache.len(), 2);
+            // A file that is only tested in the Settings window plays but is
+            // not kept.
+            assert!(worker.samples(&test).is_some());
+            assert!(!worker.cache.contains_key(&test));
+
+            worker.preload(vec![reset.clone()]);
+            assert!(!worker.cache.contains_key(&split));
+            assert!(worker.cache.contains_key(&reset));
+            worker.preload(Vec::new());
+            assert!(worker.cache.is_empty());
             let _ = std::fs::remove_dir_all(directory);
         }
     }

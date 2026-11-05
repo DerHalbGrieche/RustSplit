@@ -217,6 +217,61 @@ impl AppConfig {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         self.general.last_layout = Some(path);
     }
+
+    /// Applies the edits of the Settings window: every setting it shows that
+    /// differs between `draft` and `base` (the settings the window started
+    /// from) is copied into `self`.
+    ///
+    /// Everything else may have changed while the window was open (recent
+    /// files, window geometry, the auto splitter choices, the server menu
+    /// toggle) and is kept, instead of being reset to the stale copy in the
+    /// draft. A setting added to the Settings window must be listed here.
+    pub fn apply_settings_edits(&mut self, base: &AppConfig, draft: &AppConfig) {
+        macro_rules! edited {
+            ($($($field:ident).+),* $(,)?) => {$(
+                if draft.$($field).+ != base.$($field).+ {
+                    self.$($field).+ = draft.$($field).+.clone();
+                }
+            )*};
+        }
+        edited!(
+            hotkeys.enabled,
+            hotkeys.start_split,
+            hotkeys.reset,
+            hotkeys.undo,
+            hotkeys.skip,
+            hotkeys.pause,
+            hotkeys.undo_all_pauses,
+            hotkeys.switch_comparison_next,
+            hotkeys.switch_comparison_previous,
+            hotkeys.toggle_timing_method,
+            hotkeys.edit_run,
+            hotkeys.edit_layout,
+            server.enabled,
+            server.autostart,
+            server.port,
+            server.bind_address,
+            general.autosave,
+            general.autosave_layout,
+            general.use_system_file_dialogs,
+            speedrun_com.fetch_world_records,
+            sounds.volume,
+            sounds.split,
+            sounds.split_ahead,
+            sounds.split_behind,
+            sounds.best_segment,
+            sounds.undo_split,
+            sounds.skip_split,
+            sounds.personal_best,
+            sounds.not_a_personal_best,
+            sounds.reset,
+            sounds.pause,
+            sounds.resume,
+            sounds.start_timer,
+            niri.enabled,
+            niri.auto_float,
+        );
+    }
 }
 
 /// Directory where RustSplit stores layouts and backups.
@@ -277,6 +332,47 @@ mod tests {
         let loaded: AppConfig = toml::from_str(&data).unwrap();
         assert_eq!(loaded.sounds, config.sounds);
         assert_eq!(loaded.sounds.reset, None);
+    }
+
+    #[test]
+    fn settings_edits_keep_changes_made_elsewhere() {
+        let base = AppConfig::default();
+        let mut draft = base.clone();
+        draft.hotkeys.start_split = "F1".to_string();
+        draft.sounds.split = Some(PathBuf::from("/sounds/split.wav"));
+        draft.server.port = 23456;
+
+        // While the window was open: an auto splitter was chosen, a run
+        // opened, the window moved and the server started from the menu.
+        let mut config = base.clone();
+        config
+            .auto_splitter
+            .runs
+            .insert("/runs/a.lss".to_string(), PathBuf::from("/a.wasm"));
+        config.general.last_run = Some(PathBuf::from("/runs/a.lss"));
+        config.niri.x = Some(10.0);
+        config.server.enabled = true;
+
+        config.apply_settings_edits(&base, &draft);
+        assert_eq!(config.hotkeys.start_split, "F1");
+        assert_eq!(
+            config.sounds.split,
+            Some(PathBuf::from("/sounds/split.wav"))
+        );
+        assert_eq!(config.server.port, 23456);
+        assert_eq!(config.auto_splitter.runs.len(), 1);
+        assert_eq!(config.general.last_run, Some(PathBuf::from("/runs/a.lss")));
+        assert_eq!(config.niri.x, Some(10.0));
+        assert!(config.server.enabled, "the draft did not touch the toggle");
+
+        // Unchecking a setting is an edit too.
+        let base = config.clone();
+        let mut draft = base.clone();
+        draft.server.enabled = false;
+        draft.general.autosave = false;
+        config.apply_settings_edits(&base, &draft);
+        assert!(!config.server.enabled);
+        assert!(!config.general.autosave);
     }
 
     #[test]

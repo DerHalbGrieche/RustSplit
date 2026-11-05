@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,8 @@ const RECORD_TTL: Duration = Duration::from_secs(60 * 60);
 const ERROR_RETRY: Duration = Duration::from_secs(5 * 60);
 /// Delay before retrying after a rate limit without a `Retry-After` header.
 const RATE_LIMIT_RETRY: Duration = Duration::from_secs(60);
+/// Upper bound for a server-provided `Retry-After`.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// Everything that determines which record is shown. A change to any field
 /// triggers a new lookup.
@@ -187,8 +189,21 @@ impl WorldRecordService {
             return;
         };
         let mut finished = Vec::new();
-        while let Ok(response) = worker.responses.try_recv() {
-            finished.push(response);
+        let disconnected = loop {
+            match worker.responses.try_recv() {
+                Ok(response) => finished.push(response),
+                Err(TryRecvError::Empty) => break false,
+                Err(TryRecvError::Disconnected) => break true,
+            }
+        };
+        if disconnected {
+            // The worker thread died (e.g. a panic). Start a new one for the
+            // next lookup instead of waiting for an answer forever.
+            log::warn!("the speedrun.com worker stopped");
+            self.worker = None;
+            if let Some(query) = self.pending.take() {
+                self.retry_later(query, retry_at(Instant::now(), ERROR_RETRY));
+            }
         }
         for (query, result) in finished {
             if self.pending.as_ref() == Some(&query) {
@@ -207,7 +222,7 @@ impl WorldRecordService {
                 }
                 Err(error) => {
                     log::warn!("speedrun.com world record lookup failed: {error}");
-                    self.retry_later(query, now + error.retry_delay());
+                    self.retry_later(query, retry_at(now, error.retry_delay()));
                 }
             }
         }
@@ -223,6 +238,11 @@ impl WorldRecordService {
                 refresh_at: at,
             });
     }
+}
+
+/// `now + delay`, saturating far in the future instead of overflowing.
+fn retry_at(now: Instant, delay: Duration) -> Instant {
+    now.checked_add(delay.min(MAX_RETRY_AFTER)).unwrap_or(now)
 }
 
 fn spawn_worker(ctx: egui::Context) -> std::io::Result<Worker> {
@@ -314,8 +334,7 @@ impl Transport for UreqTransport {
                 .headers()
                 .get("retry-after")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.trim().parse().ok())
-                .map(Duration::from_secs);
+                .and_then(parse_retry_after);
             return Err(FetchError::RateLimited(delay));
         }
         if !(200..300).contains(&status) {
@@ -326,6 +345,12 @@ impl Transport for UreqTransport {
             .read_to_string()
             .map_err(|error| FetchError::Transport(error.to_string()))
     }
+}
+
+/// The delay of a `Retry-After: <seconds>` header, at most an hour.
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    let seconds: u64 = value.trim().parse().ok()?;
+    Some(Duration::from_secs(seconds).min(MAX_RETRY_AFTER))
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,5 +1213,40 @@ mod tests {
 
         timer.run.game_name.clear();
         assert_eq!(Query::for_layout(&layout, &timer), None);
+    }
+
+    #[test]
+    fn retry_after_is_clamped() {
+        assert_eq!(parse_retry_after(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(
+            parse_retry_after("18446744073709551615"),
+            Some(MAX_RETRY_AFTER)
+        );
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+        let now = Instant::now();
+        assert_eq!(retry_at(now, Duration::MAX), now + MAX_RETRY_AFTER);
+        assert_eq!(retry_at(now, ERROR_RETRY), now + ERROR_RETRY);
+    }
+
+    #[test]
+    fn lookups_recover_after_the_worker_died() {
+        let (requests, _request_receiver) = mpsc::channel();
+        let (response_sender, responses) = mpsc::channel::<Response>();
+        let mut service = WorldRecordService {
+            worker: Some(Worker {
+                requests,
+                responses,
+            }),
+            entries: HashMap::new(),
+            pending: Some(sms_query()),
+        };
+        // The worker thread panics before answering.
+        drop(response_sender);
+        service.poll();
+        assert!(service.worker.is_none());
+        assert!(service.pending.is_none());
+        let entry = &service.entries[&sms_query()];
+        assert!(entry.record.is_none());
+        assert!(entry.refresh_at > Instant::now());
     }
 }
