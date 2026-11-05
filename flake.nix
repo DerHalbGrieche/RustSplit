@@ -19,6 +19,8 @@
       runtimeDeps =
         pkgs: with pkgs; [
           alsa-lib
+          # dlopened by rfd to reach the XDG file chooser portal.
+          dbus
           libGL
           libx11
           libxcb

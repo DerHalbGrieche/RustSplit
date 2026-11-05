@@ -78,6 +78,11 @@ The desktop application and integration layer:
 - `control.rs` — local Unix control socket used by compositor key bindings
   (`rustsplit --command ...`).
 - `file_dialog.rs` — dependency-free file browser.
+- `file_dialogs.rs` — `FileDialogs` front used by the app. With the default
+  `native-dialogs` feature it runs an `rfd` system dialog (XDG portal on
+  Linux) on a background thread and polls the result over a channel, falling
+  back to the built-in browser when system dialogs are off, unavailable or
+  fail to open.
 - `niri.rs` — Niri IPC client that floats the overlay and restores its
   floating position and size.
 - `run_editor.rs` — splits/segment/comparison/attempt editor.

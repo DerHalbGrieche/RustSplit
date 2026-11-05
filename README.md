@@ -187,6 +187,22 @@ Settings live in the platform configuration directory, normally:
 
 Pass `--config PATH` to use a different file.
 
+### File dialogs
+
+RustSplit opens and saves files with the system file chooser. On Linux that
+is the XDG desktop portal, which needs, at runtime:
+
+- `libdbus-1` and a D-Bus session bus,
+- `xdg-desktop-portal`, plus a backend that implements the file chooser, such
+  as `xdg-desktop-portal-gtk`, `-gnome` or `-kde`. `xdg-desktop-portal-wlr`
+  has no file chooser, so pair it with `-gtk`.
+
+If the portal is missing, `zenity` is used when it is installed. Otherwise
+RustSplit falls back to its built-in file browser. Turn off **Use system file
+dialogs** in Settings (`use_system_file_dialogs = false` under `[general]` in
+`settings.toml`) to always use the built-in browser, or build without system
+dialogs at all with `cargo build --no-default-features`.
+
 ## LiveSplit Server
 
 Enable the server in settings or launch with `--server`. It listens on TCP

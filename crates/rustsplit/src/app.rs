@@ -14,7 +14,8 @@ use rustsplit_ui::{configure_fonts, load_layout, save_layout, Layout, LayoutMode
 
 use crate::config::AppConfig;
 use crate::control::ControlServer;
-use crate::file_dialog::{FileDialog, FileDialogAction, FileDialogMode};
+use crate::file_dialog::{FileDialogAction, FileDialogMode};
+use crate::file_dialogs::FileDialogs;
 use crate::hotkeys::{GlobalHotkeys, HotkeyAction};
 use crate::layout_editor::{LayoutEditor, LayoutEditorEvent};
 use crate::niri::{self, DesiredWindow, NiriIntegration};
@@ -68,7 +69,7 @@ pub struct RustSplitApp {
     config_path: PathBuf,
     run_editor: RunEditor,
     layout_editor: LayoutEditor,
-    file_dialog: FileDialog,
+    file_dialog: FileDialogs,
     file_purpose: Option<FilePurpose>,
     settings_open: bool,
     settings_draft: Option<AppConfig>,
@@ -120,7 +121,7 @@ impl RustSplitApp {
             config_path,
             run_editor: RunEditor::default(),
             layout_editor: LayoutEditor::default(),
-            file_dialog: FileDialog::default(),
+            file_dialog: FileDialogs::default(),
             file_purpose: None,
             settings_open: false,
             settings_draft: None,
@@ -144,6 +145,8 @@ impl RustSplitApp {
             overlay_size_before_dialog: None,
         };
         app.hotkeys.re_register(&app.config.hotkeys);
+        app.file_dialog
+            .set_prefer_native(app.config.general.use_system_file_dialogs);
         if app.config.server.enabled && app.config.server.autostart {
             app.start_server();
         }
@@ -948,6 +951,18 @@ impl RustSplitApp {
                     &mut draft.general.autosave_layout,
                     "Autosave layout after applying",
                 );
+                ui.add_enabled(
+                    cfg!(feature = "native-dialogs"),
+                    egui::Checkbox::new(
+                        &mut draft.general.use_system_file_dialogs,
+                        "Use system file dialogs",
+                    ),
+                )
+                .on_hover_text(
+                    "Use the desktop's file chooser (XDG portal on Linux). \
+                     Falls back to the built-in browser when it is unavailable.",
+                )
+                .on_disabled_hover_text("This build has no system file dialogs.");
                 if niri::is_session() {
                     ui.separator();
                     ui.heading("Niri");
@@ -1025,6 +1040,8 @@ impl RustSplitApp {
     }
 
     fn show_file_dialog(&mut self, ctx: &Context) {
+        self.file_dialog
+            .set_prefer_native(self.config.general.use_system_file_dialogs);
         let action = self.file_dialog.show(ctx);
         if let Some(action) = action {
             if action == FileDialogAction::Cancel {
@@ -1280,7 +1297,7 @@ impl RustSplitApp {
     fn any_modal_open(&self) -> bool {
         self.run_editor.open
             || self.layout_editor.open
-            || self.file_dialog.open
+            || self.file_dialog.is_open()
             || self.settings_open
             || self.about_open
     }
@@ -1448,7 +1465,7 @@ impl eframe::App for RustSplitApp {
 
         let modal_open = self.run_editor.open
             || self.layout_editor.open
-            || self.file_dialog.open
+            || self.file_dialog.is_open()
             || self.settings_open
             || self.about_open;
         if !modal_open {
