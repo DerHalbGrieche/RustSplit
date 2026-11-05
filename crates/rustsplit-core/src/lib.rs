@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod comparisons;
 pub mod format;
+pub mod fs;
 pub mod lss;
 pub mod model;
 pub mod time;

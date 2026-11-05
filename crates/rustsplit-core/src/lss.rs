@@ -21,6 +21,8 @@ use crate::xml::{
 pub enum LssError {
     #[error("could not read split file: {0}")]
     Io(#[from] std::io::Error),
+    #[error("could not write split file: {0}")]
+    Write(std::io::Error),
     #[error("invalid split file: {0}")]
     Xml(#[from] crate::xml::XmlError),
     #[error("invalid split file: {0}")]
@@ -136,7 +138,9 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, LssError> {
         ));
     }
     let units = bytes
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             if little_endian {
                 u16::from_le_bytes([pair[0], pair[1]])
@@ -448,10 +452,10 @@ fn encode_image(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(blob)
 }
 
+/// Saves `run` atomically, keeping the previous file as `<name>.lss.bak`.
 pub fn save_run(run: &Run, path: impl AsRef<Path>) -> Result<(), LssError> {
     let xml = save_run_to_string(run)?;
-    std::fs::write(path, xml)?;
-    Ok(())
+    crate::fs::write_atomic_with_backup(path, xml).map_err(LssError::Write)
 }
 
 pub fn save_run_to_string(run: &Run) -> Result<String, LssError> {

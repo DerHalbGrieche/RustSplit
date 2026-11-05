@@ -30,6 +30,8 @@ given a custom `Clock`.
 - `format.rs` — LiveSplit's general/delta time formatters (accuracy, digits,
   drop decimals, automatic precision, days, null formats).
 - `lss.rs` — LiveSplit `.lss` XML reader/writer.
+- `fs.rs` — crash-safe writes (temp file, fsync, rename) with an optional
+  `.bak` of the previous version. Used for `.lss`, `.lsl` and `settings.toml`.
 - `xml.rs` — small XML tree helpers shared by `.lss` and `.lsl`.
 
 The timer stores a `Run`. The UI never mutates timer internals directly; it

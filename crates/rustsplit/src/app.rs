@@ -452,7 +452,9 @@ impl RustSplitApp {
             ctx.send_viewport_cmd(ViewportCommand::Resizable(self.resizable));
         }
         if self.config.general.autosave_layout && self.layout.file_path.is_some() {
-            let _ = self.save_current_layout(true);
+            if let Err(error) = self.save_current_layout(true) {
+                self.set_status(format!("Could not save layout: {error}"));
+            }
         }
         self.save_config();
     }
@@ -1391,7 +1393,8 @@ impl RustSplitApp {
 
     fn backup_current_run(&mut self) {
         let directory = crate::config::data_dir().join("backups");
-        if std::fs::create_dir_all(&directory).is_err() {
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            log::error!("could not create {}: {error}", directory.display());
             return;
         }
         let name = if self.timer.run.extended_file_name().trim().is_empty() {
@@ -1402,7 +1405,7 @@ impl RustSplitApp {
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let path = directory.join(format!("{name}-{timestamp}.lss"));
         if let Err(error) = save_run(&self.timer.run, &path) {
-            log::warn!("could not write backup {}: {error}", path.display());
+            log::error!("could not write backup {}: {error}", path.display());
         } else {
             log::info!("saved backup to {}", path.display());
         }
@@ -1493,7 +1496,12 @@ impl eframe::App for RustSplitApp {
         }
         if self.config.general.autosave && self.timer.run.has_changed {
             if self.timer.run.file_path.is_some() {
-                let _ = self.save_current_run(true);
+                // Keep the unsaved changes somewhere if the split file can't
+                // be written.
+                if let Err(error) = self.save_current_run(true) {
+                    log::error!("could not save splits on exit: {error}");
+                    self.backup_current_run();
+                }
             } else {
                 self.backup_current_run();
             }

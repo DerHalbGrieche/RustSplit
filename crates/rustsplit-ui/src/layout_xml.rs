@@ -66,6 +66,8 @@ use crate::xml::{
 pub enum LayoutXmlError {
     #[error("could not read layout: {0}")]
     Io(#[from] std::io::Error),
+    #[error("could not write layout: {0}")]
+    Write(std::io::Error),
     #[error("could not parse layout XML: {0}")]
     Xml(#[from] crate::xml::XmlError),
     #[error("invalid layout: {0}")]
@@ -84,10 +86,10 @@ pub fn load_layout(path: impl AsRef<Path>) -> Result<Layout, LayoutXmlError> {
     Ok(layout)
 }
 
+/// Saves `layout` atomically, keeping the previous file as `<name>.lsl.bak`.
 pub fn save_layout(layout: &Layout, path: impl AsRef<Path>) -> Result<(), LayoutXmlError> {
     let xml = layout_to_string(layout)?;
-    std::fs::write(path, xml)?;
-    Ok(())
+    rustsplit_core::fs::write_atomic_with_backup(path, xml).map_err(LayoutXmlError::Write)
 }
 
 pub fn parse_layout(data: impl AsRef<[u8]>) -> Result<Layout, LayoutXmlError> {

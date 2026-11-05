@@ -16,7 +16,6 @@ pub struct AppConfig {
     pub niri: NiriConfig,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
@@ -57,7 +56,6 @@ pub struct HotkeyConfig {
     pub edit_layout: String,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
@@ -87,7 +85,6 @@ pub struct WindowConfig {
     pub x: Option<f32>,
     pub y: Option<f32>,
 }
-
 
 /// Niri-specific overlay geometry.
 ///
@@ -146,10 +143,7 @@ impl AppConfig {
         }
         let data = toml::to_string_pretty(self)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let temporary = path.with_extension("toml.tmp");
-        std::fs::write(&temporary, data)?;
-        std::fs::rename(temporary, path)?;
-        Ok(())
+        rustsplit_core::fs::write_atomic(path, data)
     }
 
     pub fn remember_run(&mut self, path: &Path) {
