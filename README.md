@@ -59,6 +59,16 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
   controlled.
 - **Sound effects** for splits, golds, personal bests, resets and other timer
   events, like LiveSplit's Sound Settings.
+- **speedrun.com world records** for the World Record component, opt-in and
+  fetched in the background.
+- **Precise input timing**: hotkeys, server commands, compositor bindings and
+  auto splitters are timestamped when they arrive, so splits keep their exact
+  time even while the window is minimized or busy.
+- **Crash-safe saving**: split files, layouts and settings are written
+  atomically, and the previous version of each split file and layout is kept
+  as a `.bak`.
+- **System file dialogs** through the XDG desktop portal on Linux, with a
+  built-in browser as fallback.
 - **Transparent configuration** in `settings.toml`, recent runs and layouts.
 
 ## Building
@@ -84,10 +94,12 @@ cargo build --release -p rustsplit --no-default-features \
   --features native-dialogs,sounds,speedrun-com
 ```
 
-On NixOS this repository works with the standard Rust toolchain:
+On NixOS, the flake provides a development shell with every build
+dependency, and a package:
 
 ```bash
-nix-shell -p cargo rustc --run 'cargo build --release'
+nix develop -c cargo build --release
+nix build   # or: nix run
 ```
 
 Run the tests with:
