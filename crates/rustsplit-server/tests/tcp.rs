@@ -1,10 +1,14 @@
 use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustsplit_core::{Run, TestClock, Timer};
-use rustsplit_server::{handle_command, ServerCommand, ServerHandle, ServerRequest};
+use rustsplit_server::{
+    handle_command, ServerCommand, ServerHandle, ServerRequest, MAX_LINE_LENGTH,
+};
 
 struct Client {
     reader: BufReader<TcpStream>,
@@ -56,6 +60,43 @@ fn receive_request(handle: &ServerHandle) -> ServerRequest {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
+}
+
+fn ping(handle: &ServerHandle, client: &mut Client) {
+    client.send("ping");
+    let request = receive_request(handle);
+    assert_eq!(request.command, ServerCommand::Ping);
+    request.respond_str("pong");
+    assert_eq!(client.receive(), "pong");
+}
+
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Assert that the server closed the connection.  A read timeout means the
+/// connection is still open and fails the assertion.
+fn assert_closed(client: &mut Client) {
+    let mut line = String::new();
+    match client.reader.read_line(&mut line) {
+        Ok(0) => {}
+        Ok(_) => panic!("unexpected data on a closed connection: {line:?}"),
+        Err(error) => assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ),
+            "connection was not closed: {error}"
+        ),
+    }
+}
+
+fn local_addr() -> SocketAddr {
+    SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
 }
 
 fn test_timer() -> Timer {
@@ -180,4 +221,118 @@ fn stop_closes_connected_clients() {
             );
         }
     }
+}
+
+#[test]
+fn notifier_fires_when_a_command_is_queued() {
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let (wake_sender, wake_receiver) = mpsc::sync_channel(16);
+    let counter = Arc::clone(&notifications);
+    let handle = ServerHandle::builder(local_addr())
+        .notifier(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let _ = wake_sender.try_send(());
+        })
+        .start()
+        .expect("server should start on an ephemeral port");
+
+    let mut client = Client::connect(handle.bind_addr());
+    // Connecting alone does not wake the application.
+    wait_until("the connection to be accepted", || {
+        handle.client_count() == 1
+    });
+    assert_eq!(notifications.load(Ordering::SeqCst), 0);
+
+    client.send("ping");
+    wake_receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the notifier should fire when a command arrives");
+    // The request is queued before the notifier runs, so a woken
+    // application finds it without polling.
+    let request = handle
+        .try_recv()
+        .expect("request should be queued before the notification");
+    assert_eq!(request.command, ServerCommand::Ping);
+    request.respond_str("pong");
+    assert_eq!(client.receive(), "pong");
+
+    // Invalid commands never reach the application and do not wake it.
+    client.send("definitely-not-a-command");
+    ping(&handle, &mut client);
+    assert_eq!(notifications.load(Ordering::SeqCst), 2);
+
+    handle.stop();
+}
+
+#[test]
+fn client_limit_is_enforced_and_slots_are_freed() {
+    let handle = ServerHandle::builder(local_addr())
+        .max_clients(2)
+        .start()
+        .expect("server should start on an ephemeral port");
+
+    let mut first = Client::connect(handle.bind_addr());
+    let mut second = Client::connect(handle.bind_addr());
+    ping(&handle, &mut first);
+    ping(&handle, &mut second);
+    assert_eq!(handle.client_count(), 2);
+
+    // The third client is accepted by the OS but closed by the server.
+    let mut refused = Client::connect(handle.bind_addr());
+    assert_closed(&mut refused);
+    assert_eq!(handle.client_count(), 2);
+    assert!(handle.is_running());
+
+    // Disconnecting frees a slot for a new client.
+    drop(first);
+    wait_until("the slot to be freed", || handle.client_count() == 1);
+    let mut third = Client::connect(handle.bind_addr());
+    ping(&handle, &mut third);
+    ping(&handle, &mut second);
+    assert_eq!(handle.client_count(), 2);
+
+    drop(second);
+    drop(third);
+    wait_until("all slots to be freed", || handle.client_count() == 0);
+    handle.stop();
+}
+
+#[test]
+fn over_long_line_closes_only_that_connection() {
+    let handle = ServerHandle::start(0).expect("server should start on an ephemeral port");
+    let mut bystander = Client::connect(handle.bind_addr());
+    ping(&handle, &mut bystander);
+
+    // A line exactly at the limit is still accepted.
+    let mut client = Client::connect(handle.bind_addr());
+    let prefix = "setcomparison ";
+    let name = "x".repeat(MAX_LINE_LENGTH - prefix.len());
+    client.send(&format!("{prefix}{name}"));
+    let request = receive_request(&handle);
+    assert_eq!(request.command, ServerCommand::SwitchComparison(name));
+    drop(request);
+    ping(&handle, &mut client);
+
+    // One byte more closes the connection.  The server stops reading at the
+    // limit, so the write itself may fail once the socket is reset.
+    let mut abuser = Client::connect(handle.bind_addr());
+    let line = format!("ping{}\n", " ".repeat(MAX_LINE_LENGTH - 3));
+    let _ = abuser.reader.get_mut().write_all(line.as_bytes());
+    assert_closed(&mut abuser);
+    assert!(
+        handle.try_recv().is_none(),
+        "the long line must not be queued"
+    );
+
+    // The server and the other connections keep working.
+    assert!(handle.is_running());
+    ping(&handle, &mut bystander);
+    ping(&handle, &mut client);
+    let mut fresh = Client::connect(handle.bind_addr());
+    ping(&handle, &mut fresh);
+    wait_until("the closed connection to free its slot", || {
+        handle.client_count() == 3
+    });
+
+    handle.stop();
 }

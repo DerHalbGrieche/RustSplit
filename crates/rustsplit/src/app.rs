@@ -148,7 +148,7 @@ impl RustSplitApp {
         app.file_dialog
             .set_prefer_native(app.config.general.use_system_file_dialogs);
         if app.config.server.enabled && app.config.server.autostart {
-            app.start_server();
+            app.start_server(&cc.egui_ctx);
         }
         app
     }
@@ -316,7 +316,7 @@ impl RustSplitApp {
                 if self.server.is_some() {
                     self.stop_server();
                 } else {
-                    self.start_server();
+                    self.start_server(ctx);
                 }
             }
             Action::Settings => {
@@ -723,7 +723,7 @@ impl RustSplitApp {
         }
     }
 
-    fn start_server(&mut self) {
+    fn start_server(&mut self, ctx: &Context) {
         if self.server.is_some() {
             return;
         }
@@ -734,7 +734,13 @@ impl RustSplitApp {
             .parse::<IpAddr>()
             .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let socket = SocketAddr::new(address, self.config.server.port);
-        match ServerHandle::start_with_addr(socket) {
+        // Wake the UI as soon as a request is queued; the client thread is
+        // blocked until `poll_server` answers it.
+        let ctx = ctx.clone();
+        let server = ServerHandle::builder(socket)
+            .notifier(move || ctx.request_repaint())
+            .start();
+        match server {
             Ok(server) => {
                 self.config.server.enabled = true;
                 self.server_error = None;
@@ -852,7 +858,9 @@ impl RustSplitApp {
             Ok(None) => {}
             Err(error) => log::warn!("Niri integration: {error}"),
         }
-        if !niri.is_applied() {
+        // Keep probing until the window is configured, but stop waking the
+        // app once the integration gave up on finding it.
+        if niri.is_probing() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -1004,7 +1012,7 @@ impl RustSplitApp {
                 let wanted = self.config.server.enabled;
                 self.stop_server();
                 if wanted {
-                    self.start_server();
+                    self.start_server(ctx);
                 }
             }
             self.sync_niri();
@@ -1492,17 +1500,12 @@ impl eframe::App for RustSplitApp {
         self.update_window_metadata(&ctx);
         self.store_window_geometry();
 
-        let repaint = if self.server.is_some() {
-            // Poll the remote-control queue promptly even while the timer is
-            // idle.  Without this the server responses can feel sluggish
-            // because egui only repaints every 250 ms when nothing changes.
-            Duration::from_millis(33)
-        } else {
-            match self.timer.phase {
-                TimerPhase::Running => Duration::from_millis(16),
-                TimerPhase::Paused => Duration::from_millis(100),
-                _ => Duration::from_millis(250),
-            }
+        // The server and control socket request a repaint when a command
+        // arrives, so the idle cadence only has to follow the timer.
+        let repaint = match self.timer.phase {
+            TimerPhase::Running => Duration::from_millis(16),
+            TimerPhase::Paused => Duration::from_millis(100),
+            _ => Duration::from_millis(250),
         };
         ctx.request_repaint_after(repaint);
     }

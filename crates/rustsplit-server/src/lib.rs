@@ -11,7 +11,8 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let server = ServerHandle::start(16834)?;
-//! // In the application's frame loop:
+//! // In the application's frame loop (see `ServerBuilder::notifier` to be
+//! // woken when a request arrives instead of polling):
 //! // if let Some(request) = server.try_recv() {
 //! //     let outcome = handle_command(&mut timer, &request.command);
 //! //     request.respond(outcome.response);
@@ -22,6 +23,9 @@
 //!
 //! Command names are case sensitive, exactly like LiveSplit's server.  A
 //! command is terminated by `\n`; every response is terminated by `\n`.
+//! Lines longer than [`MAX_LINE_LENGTH`] bytes close the connection, and at
+//! most [`DEFAULT_MAX_CLIENTS`] clients (configurable through
+//! [`ServerBuilder::max_clients`]) are served at once.
 //!
 //! # Split indices
 //!
@@ -33,9 +37,9 @@
 //! LiveSplit's convention.  [`ServerCommand::GetSplitIndex`] reports the
 //! current split one-based, or `-1` while the timer is not running.
 
-use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -52,6 +56,20 @@ pub const DEFAULT_PORT: u16 = 16834;
 
 /// Default bind address.  Only local clients are accepted by default.
 pub const DEFAULT_BIND_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+/// Default number of clients that may be connected at the same time.
+pub const DEFAULT_MAX_CLIENTS: usize = 16;
+
+/// Longest accepted command line in bytes, excluding the trailing newline.
+/// Clients sending a longer line are disconnected, which bounds the memory a
+/// single connection can make the server buffer.
+pub const MAX_LINE_LENGTH: usize = 64 * 1024;
+
+/// Callback invoked on a server thread whenever a request has been queued.
+///
+/// Applications use it to wake their event loop (for example by requesting a
+/// repaint) instead of polling [`ServerHandle::try_recv`] on a timer.
+pub type Notifier = Arc<dyn Fn() + Send + Sync>;
 
 const REQUEST_QUEUE_SIZE: usize = 256;
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -262,6 +280,7 @@ pub struct ServerHandle {
     finished: Arc<AtomicBool>,
     thread: Mutex<Option<JoinHandle<()>>>,
     bind_addr: SocketAddr,
+    clients: Arc<AtomicUsize>,
 }
 
 impl ServerHandle {
@@ -280,31 +299,13 @@ impl ServerHandle {
 
     /// Start a server with an explicit bind address.
     pub fn start_with_addr(addr: SocketAddr) -> Result<Self, ServerError> {
-        let listener =
-            TcpListener::bind(addr).map_err(|source| ServerError::Bind { addr, source })?;
-        listener.set_nonblocking(true)?;
-        let bind_addr = listener.local_addr()?;
+        Self::builder(addr).start()
+    }
 
-        let running = Arc::new(AtomicBool::new(true));
-        let finished = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = sync_channel(REQUEST_QUEUE_SIZE);
-
-        let thread_running = Arc::clone(&running);
-        let thread_finished = Arc::clone(&finished);
-        let thread = thread::Builder::new()
-            .name("rustsplit-server".to_string())
-            .spawn(move || {
-                accept_loop(listener, sender, thread_running);
-                thread_finished.store(true, Ordering::SeqCst);
-            })?;
-
-        Ok(Self {
-            receiver,
-            running,
-            finished,
-            thread: Mutex::new(Some(thread)),
-            bind_addr,
-        })
+    /// Configure a server before starting it, for example to install a
+    /// [`Notifier`] or change the client limit.
+    pub fn builder(addr: SocketAddr) -> ServerBuilder {
+        ServerBuilder::new(addr)
     }
 
     /// Receive the next pending command, if there is one.
@@ -342,6 +343,80 @@ impl ServerHandle {
     pub fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
+
+    /// Number of currently connected clients.
+    pub fn client_count(&self) -> usize {
+        self.clients.load(Ordering::SeqCst)
+    }
+}
+
+/// Builder for a [`ServerHandle`] with non-default options.
+pub struct ServerBuilder {
+    addr: SocketAddr,
+    max_clients: usize,
+    notifier: Option<Notifier>,
+}
+
+impl ServerBuilder {
+    /// Start configuring a server that will bind to `addr`.
+    pub fn new(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            max_clients: DEFAULT_MAX_CLIENTS,
+            notifier: None,
+        }
+    }
+
+    /// Maximum number of concurrently connected clients (at least one).
+    /// Further connections are accepted and closed immediately.
+    pub fn max_clients(mut self, max_clients: usize) -> Self {
+        self.max_clients = max_clients.max(1);
+        self
+    }
+
+    /// Call `notifier` on a server thread every time a request is queued.
+    pub fn notifier(mut self, notifier: impl Fn() + Send + Sync + 'static) -> Self {
+        self.notifier = Some(Arc::new(notifier));
+        self
+    }
+
+    /// Bind the socket and start the accept thread.
+    pub fn start(self) -> Result<ServerHandle, ServerError> {
+        let addr = self.addr;
+        let listener =
+            TcpListener::bind(addr).map_err(|source| ServerError::Bind { addr, source })?;
+        listener.set_nonblocking(true)?;
+        let bind_addr = listener.local_addr()?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let finished = Arc::new(AtomicBool::new(false));
+        let clients = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = sync_channel(REQUEST_QUEUE_SIZE);
+
+        let shared = ClientShared {
+            sender,
+            running: Arc::clone(&running),
+            notifier: self.notifier,
+        };
+        let thread_clients = Arc::clone(&clients);
+        let thread_finished = Arc::clone(&finished);
+        let max_clients = self.max_clients;
+        let thread = thread::Builder::new()
+            .name("rustsplit-server".to_string())
+            .spawn(move || {
+                accept_loop(listener, shared, thread_clients, max_clients);
+                thread_finished.store(true, Ordering::SeqCst);
+            })?;
+
+        Ok(ServerHandle {
+            receiver,
+            running,
+            finished,
+            thread: Mutex::new(Some(thread)),
+            bind_addr,
+            clients,
+        })
+    }
 }
 
 impl Drop for ServerHandle {
@@ -350,17 +425,61 @@ impl Drop for ServerHandle {
     }
 }
 
-fn accept_loop(listener: TcpListener, sender: SyncSender<ServerRequest>, running: Arc<AtomicBool>) {
-    while running.load(Ordering::SeqCst) {
+/// State every client thread needs, cloned per connection.
+#[derive(Clone)]
+struct ClientShared {
+    sender: SyncSender<ServerRequest>,
+    running: Arc<AtomicBool>,
+    notifier: Option<Notifier>,
+}
+
+/// One occupied client slot.  The slot is released when this is dropped, so
+/// it is freed however the client thread ends (including a panic) and also
+/// when the thread could not be spawned at all.
+struct ClientSlot(Arc<AtomicUsize>);
+
+impl ClientSlot {
+    fn acquire(clients: &Arc<AtomicUsize>, max_clients: usize) -> Option<Self> {
+        if clients.fetch_add(1, Ordering::SeqCst) >= max_clients {
+            clients.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(Arc::clone(clients)))
+    }
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn accept_loop(
+    listener: TcpListener,
+    shared: ClientShared,
+    clients: Arc<AtomicUsize>,
+    max_clients: usize,
+) {
+    while shared.running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer)) => {
+                let Some(slot) = ClientSlot::acquire(&clients, max_clients) else {
+                    log::warn!(
+                        "[server] refusing connection from {peer}: \
+                         {max_clients} clients are already connected"
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    continue;
+                };
                 let _ = stream.set_nodelay(true);
                 log::debug!("[server] accepted connection from {peer}");
-                let client_sender = sender.clone();
-                let client_running = Arc::clone(&running);
+                let client_shared = shared.clone();
                 if let Err(error) = thread::Builder::new()
                     .name("rustsplit-server-client".to_string())
-                    .spawn(move || client_loop(stream, client_sender, client_running))
+                    .spawn(move || {
+                        let _slot = slot;
+                        client_loop(stream, &client_shared);
+                    })
                 {
                     log::warn!("[server] could not spawn client thread: {error}");
                 }
@@ -377,7 +496,7 @@ fn accept_loop(listener: TcpListener, sender: SyncSender<ServerRequest>, running
     }
 }
 
-fn client_loop(stream: TcpStream, sender: SyncSender<ServerRequest>, running: Arc<AtomicBool>) {
+fn client_loop(stream: TcpStream, shared: &ClientShared) {
     let _ = stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(RESPONSE_TIMEOUT));
     let reader_stream = match stream.try_clone() {
@@ -391,13 +510,25 @@ fn client_loop(stream: TcpStream, sender: SyncSender<ServerRequest>, running: Ar
     let mut writer = stream;
     let mut buffer = Vec::new();
 
-    while running.load(Ordering::SeqCst) {
-        match reader.read_until(b'\n', &mut buffer) {
+    while shared.running.load(Ordering::SeqCst) {
+        // Never read more than one byte past the limit, so an endless line
+        // cannot grow the buffer.  The buffer holds at most `MAX_LINE_LENGTH`
+        // bytes here, so the limit is never zero and `Ok(0)` still means EOF.
+        let limit = (MAX_LINE_LENGTH + 1 - buffer.len()) as u64;
+        match (&mut reader).take(limit).read_until(b'\n', &mut buffer) {
             Ok(0) => break,
             Ok(_) => {
-                // `read_until` only stops early on EOF; keep a partial line
-                // buffered in that case and let the next read finish it.
+                // `read_until` only stops early on EOF or at the length
+                // limit; keep a partial line buffered and let the next read
+                // finish it, unless it is already too long.
                 if !buffer.ends_with(b"\n") {
+                    if buffer.len() > MAX_LINE_LENGTH {
+                        log::warn!(
+                            "[server] closing connection: command line exceeds \
+                             {MAX_LINE_LENGTH} bytes"
+                        );
+                        break;
+                    }
                     continue;
                 }
                 buffer.pop();
@@ -413,7 +544,7 @@ fn client_loop(stream: TcpStream, sender: SyncSender<ServerRequest>, running: Ar
 
                 match parse_command(&line) {
                     Ok(command) => {
-                        if !dispatch_command(command, &sender, &running, &mut writer) {
+                        if !dispatch_command(command, shared, &mut writer) {
                             break;
                         }
                     }
@@ -435,12 +566,7 @@ fn client_loop(stream: TcpStream, sender: SyncSender<ServerRequest>, running: Ar
     }
 }
 
-fn dispatch_command(
-    command: ServerCommand,
-    sender: &SyncSender<ServerRequest>,
-    running: &AtomicBool,
-    writer: &mut TcpStream,
-) -> bool {
+fn dispatch_command(command: ServerCommand, shared: &ClientShared, writer: &mut TcpStream) -> bool {
     let (response_sender, response_receiver) = sync_channel(1);
     let request = ServerRequest {
         command,
@@ -450,10 +576,10 @@ fn dispatch_command(
     let deadline = Instant::now() + REQUEST_SEND_TIMEOUT;
     let mut request = request;
     loop {
-        match sender.try_send(request) {
+        match shared.sender.try_send(request) {
             Ok(()) => break,
             Err(TrySendError::Full(returned)) => {
-                if !running.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                if !shared.running.load(Ordering::SeqCst) || Instant::now() >= deadline {
                     log::warn!(
                         "[server] command queue is full; dropping {:?}",
                         returned.command
@@ -466,8 +592,11 @@ fn dispatch_command(
             Err(TrySendError::Disconnected(_)) => return false,
         }
     }
+    if let Some(notifier) = &shared.notifier {
+        notifier();
+    }
 
-    match wait_for_response(&response_receiver, running) {
+    match wait_for_response(&response_receiver, &shared.running) {
         Some(Some(response)) => {
             if let Err(error) = write_response(writer, &response) {
                 log::debug!("[server] client write failed: {error}");
@@ -1411,4 +1540,30 @@ fn expect_json_char(
         return Err(format!("expected '{expected}'"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_slots_are_capped_and_freed_on_panic() {
+        let clients = Arc::new(AtomicUsize::new(0));
+        let first = ClientSlot::acquire(&clients, 2).expect("first slot");
+        let second = ClientSlot::acquire(&clients, 2).expect("second slot");
+        assert!(ClientSlot::acquire(&clients, 2).is_none());
+        assert_eq!(clients.load(Ordering::SeqCst), 2);
+
+        drop(first);
+        assert_eq!(clients.load(Ordering::SeqCst), 1);
+
+        // A client thread that panics still releases its slot.
+        let result = thread::spawn(move || {
+            let _slot = second;
+            panic!("client thread failed");
+        })
+        .join();
+        assert!(result.is_err());
+        assert_eq!(clients.load(Ordering::SeqCst), 0);
+    }
 }
