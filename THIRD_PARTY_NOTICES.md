@@ -46,6 +46,18 @@ global-hotkey, serde and the Rust standard library ecosystem). Their licenses
 are available from their respective crates. If you distribute binaries, keep
 the relevant license notices for those dependencies.
 
+Most dependencies are MIT and/or Apache-2.0. The exceptions in a default
+build are:
+
+- **MPL-2.0:** the Symphonia audio decoders used by rodio for timer sounds
+  (`symphonia*`, `sounds` feature) and `option-ext`. MPL-2.0 is file-level
+  copyleft: it does not affect RustSplit's own code, but modified Symphonia
+  source files must stay under MPL-2.0. Source: https://github.com/pdeljanov/Symphonia
+- **CDLA-Permissive-2.0:** `webpki-roots`, the Mozilla root certificates used
+  for speedrun.com requests (`speedrun-com` feature).
+- **Unicode-3.0:** the ICU4X data crates (`icu_*`) used for URL handling.
+- **BSL-1.0:** `clipboard-win` and `error-code` (Windows clipboard support).
+
 ## Trademarks
 
 LiveSplit and the LiveSplit logo are marks of their respective owners.
