@@ -39,6 +39,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.17"
 toml = "0.9.10"
+# HTTP client for speedrun.com, using rustls (no native-tls/OpenSSL).
+ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 xmltree = "0.12.0"
 
 [workspace.lints.clippy]

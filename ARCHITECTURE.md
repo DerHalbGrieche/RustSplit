@@ -89,6 +89,10 @@ The desktop application and integration layer:
 - `run_editor.rs` — splits/segment/comparison/attempt editor.
 - `layout_editor.rs` — component list, component settings and global theme.
 - `hotkeys.rs` — global hotkey registration and action mapping.
+- `speedrun_com.rs` — opt-in speedrun.com client (`speedrun-com` feature) for
+  the World Record component. A background thread resolves the game and
+  category and fetches the leaderboard's top run; the app hands the cached
+  `WorldRecord` to the renderer, so `rustsplit-ui` stays free of networking.
 
 ## Data flow
 

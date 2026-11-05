@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "id": "v1pxjz68",
+      "names": {
+        "international": "Super Mario Sunshine",
+        "japanese": null,
+        "twitch": "Super Mario Sunshine"
+      },
+      "abbreviation": "sms",
+      "weblink": "https://www.speedrun.com/sms"
+    },
+    {
+      "id": "pdv4n4dw",
+      "names": {
+        "international": "Super Mario Sunshine 64",
+        "japanese": null,
+        "twitch": "Super Mario Sunshine 64"
+      },
+      "abbreviation": "sms64",
+      "weblink": "https://www.speedrun.com/sms64"
+    },
+    {
+      "id": "m1me8gxd",
+      "names": {
+        "international": "Super Mario Sunshine 128",
+        "japanese": null,
+        "twitch": "Super Mario Sunshine 128"
+      },
+      "abbreviation": "sms128",
+      "weblink": "https://www.speedrun.com/sms128"
+    }
+  ]
+}

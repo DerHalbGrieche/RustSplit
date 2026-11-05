@@ -20,6 +20,7 @@ use crate::components::{
 };
 use crate::layout::{color_to_hex, parse_color, BackgroundStyle, FontSpec, GradientType};
 use crate::layout_xml::{font_to_xml, parse_font};
+use crate::world_record::WorldRecord;
 use crate::xml::{
     child, child_text, element_with_text, parse_bool, parse_f32, parse_i32, XmlElement,
 };
@@ -1649,8 +1650,8 @@ pub fn draw_world_record(
     settings: &WorldRecordSettings,
 ) {
     let method = ctx.resolved_timing_method(settings.timing_method);
-    let value = cached_world_record(ctx.timer, method);
-    let time_text = format_world_record(value, settings.precision_type);
+    let value = world_record_text(ctx.world_record, ctx.timer, method, settings.precision_type);
+    let time_text = value.clone().unwrap_or_else(|| "-".to_string());
     let name_color = if settings.override_text_color {
         settings.text_color
     } else {
@@ -1664,8 +1665,8 @@ pub fn draw_world_record(
     paint_background(ui.painter(), rect, &settings.background);
 
     if settings.centered_text && !settings.display_2_rows {
-        let text = if value.is_some() {
-            format!("World Record: {time_text}")
+        let text = if let Some(value) = &value {
+            format!("World Record: {value}")
         } else {
             "No World Record".to_string()
         };
@@ -1714,6 +1715,34 @@ pub fn draw_world_record(
             settings.display_2_rows,
         );
     }
+}
+
+/// The record shown by the component: fetched leaderboard data when the
+/// application supplied it, otherwise a "World Record"/"WR" comparison stored
+/// in the splits.
+fn world_record_text(
+    record: Option<&WorldRecord>,
+    timer: &Timer,
+    method: TimingMethod,
+    precision_type: i32,
+) -> Option<String> {
+    let Some(record) = record else {
+        return cached_world_record(timer, method)
+            .map(|time| format_world_record(Some(time), precision_type));
+    };
+    // "From Leaderboard" follows the game's millisecond display rule.
+    let precision_type = match precision_type {
+        0 if record.show_milliseconds => 2,
+        0 => 1,
+        other => other,
+    };
+    let time = format_world_record(Some(record.time), precision_type);
+    let runners = record.runners_text();
+    Some(if runners.is_empty() {
+        time
+    } else {
+        format!("{time} by {runners}")
+    })
 }
 
 fn cached_world_record(timer: &Timer, method: TimingMethod) -> Option<TimeSpan> {
@@ -1787,7 +1816,10 @@ pub fn world_record_settings_ui(ui: &mut Ui, settings: &mut WorldRecordSettings)
         "Filter by subcategories",
     );
     ui.checkbox(&mut settings.filter_variables, "Filter by variables");
-    ui.label("Filters are stored for layout compatibility; no network lookup is performed.");
+    ui.label(
+        "Filters apply when world records are fetched from speedrun.com \
+         (enable it in Settings).",
+    );
 
     ui.separator();
     color_setting(
@@ -2469,5 +2501,33 @@ mod tests {
         );
         assert_eq!(cached_world_record(&timer, TimingMethod::RealTime), None);
         assert_eq!(format_world_record(None, 0), "-");
+        assert_eq!(
+            world_record_text(None, &timer, TimingMethod::RealTime, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn fetched_world_record_text() {
+        let timer = Timer::with_system_clock(Run::default());
+        let mut record = WorldRecord {
+            time: TimeSpan::from_millis(83_456),
+            runners: vec!["Alice".to_string(), "Bob & Carol".to_string()],
+            show_milliseconds: false,
+        };
+        assert_eq!(
+            world_record_text(Some(&record), &timer, TimingMethod::RealTime, 0).as_deref(),
+            Some("1:23 by Alice, Bob & Carol")
+        );
+        record.show_milliseconds = true;
+        record.runners.clear();
+        assert_eq!(
+            world_record_text(Some(&record), &timer, TimingMethod::RealTime, 0).as_deref(),
+            Some("1:23.456")
+        );
+        assert_eq!(
+            world_record_text(Some(&record), &timer, TimingMethod::GameTime, 1).as_deref(),
+            Some("1:23")
+        );
     }
 }

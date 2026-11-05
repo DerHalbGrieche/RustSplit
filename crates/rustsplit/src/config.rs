@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub window: WindowConfig,
     pub niri: NiriConfig,
+    pub speedrun_com: SpeedrunComConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +120,14 @@ impl Default for NiriConfig {
     }
 }
 
+/// speedrun.com integration. Network access is opt-in.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpeedrunComConfig {
+    /// Look up the world record for the World Record component.
+    pub fetch_world_records: bool,
+}
+
 impl AppConfig {
     pub fn default_path() -> PathBuf {
         ProjectDirs::from("org", "RustSplit", "rustsplit")
@@ -183,6 +192,7 @@ mod tests {
         config.hotkeys.start_split = "F1".to_string();
         config.niri.auto_float = false;
         config.niri.x = Some(42.0);
+        config.speedrun_com.fetch_world_records = true;
         let directory =
             std::env::temp_dir().join(format!("rustsplit-config-test-{}", std::process::id()));
         let path = directory.join("settings.toml");
@@ -193,6 +203,8 @@ mod tests {
         assert_eq!(loaded.hotkeys.start_split, "F1");
         assert!(!loaded.niri.auto_float);
         assert_eq!(loaded.niri.x, Some(42.0));
+        assert!(loaded.speedrun_com.fetch_world_records);
+        assert!(!AppConfig::default().speedrun_com.fetch_world_records);
         let _ = std::fs::remove_dir_all(directory);
     }
 

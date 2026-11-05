@@ -10,7 +10,7 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
 > every LiveSplit plugin. Core timing, `.lss` split files, `.lsl` layouts,
 > layout components and the LiveSplit Server protocol are implemented. Racing,
 > video playback, auto-splitting runtimes, sounds and Speedrun.com integration
-> are not yet part of this rewrite.
+> beyond world records are not yet part of this rewrite.
 
 <p align="center">
   <img src="docs/screenshots/overlay.png" width="210" alt="RustSplit overlay"/>
@@ -203,6 +203,27 @@ dialogs** in Settings (`use_system_file_dialogs = false` under `[general]` in
 `settings.toml`) to always use the built-in browser, or build without system
 dialogs at all with `cargo build --no-default-features`.
 
+### speedrun.com world records
+
+The World Record component can show the current world record and its runners
+from speedrun.com. This needs network access, so it is off by default: enable
+**Settings → speedrun.com → Fetch world records from speedrun.com**, or set it
+in `settings.toml`:
+
+```toml
+[speedrun_com]
+fetch_world_records = true
+```
+
+Lookups only happen while the layout contains a World Record component. They
+run in the background, are cached in memory and are refreshed hourly or when
+the game, category, timing method or the component's platform, region and
+variable filters change. The game and category come from the splits'
+speedrun.com run id when present, otherwise from their names. Errors are
+logged and the component keeps showing the last value (or `-`).
+
+Building with `--no-default-features` leaves out the HTTP client entirely.
+
 ## LiveSplit Server
 
 Enable the server in settings or launch with `--server`. It listens on TCP
@@ -243,7 +264,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a tour of the data flow.
   form; unchanged LiveSplit font blobs are preserved byte-for-byte.
 - Auto-splitter settings from `.lss` files are preserved but auto-splitting is
   not executed.
-- World Record data is not fetched from Speedrun.com by this rewrite.
+- The World Record component shows the speedrun.com record when
+  [enabled](#speedruncom-world-records); otherwise it shows a "World Record" or
+  "WR" comparison stored in the splits.
 - UI-only Server commands (screenshots, hotkey-profile switching, auto-splitter
   paths) return safe no-op responses. `switchsplits` and `switchlayout` are
   handled by the application.

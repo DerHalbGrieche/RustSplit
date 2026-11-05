@@ -9,6 +9,8 @@ mod hotkeys;
 mod layout_editor;
 mod niri;
 mod run_editor;
+#[cfg(feature = "speedrun-com")]
+mod speedrun_com;
 
 use std::path::{Path, PathBuf};
 
