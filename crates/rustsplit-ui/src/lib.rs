@@ -6,6 +6,7 @@ pub mod icon;
 pub mod layout;
 pub mod layout_xml;
 pub mod render;
+pub mod world_record;
 
 pub use components::{Component, ComponentContext};
 pub use icon::IconCache;
@@ -16,6 +17,7 @@ pub use layout::{
 pub use layout_xml::{load_layout, parse_layout, save_layout};
 pub use render::Renderer;
 pub use rustsplit_core::xml;
+pub use world_record::WorldRecord;
 
 use std::sync::Arc;
 

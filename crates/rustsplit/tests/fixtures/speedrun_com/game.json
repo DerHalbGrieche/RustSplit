@@ -1,0 +1,156 @@
+{
+  "data": {
+    "id": "v1pxjz68",
+    "names": {
+      "international": "Super Mario Sunshine",
+      "japanese": null,
+      "twitch": "Super Mario Sunshine"
+    },
+    "abbreviation": "sms",
+    "weblink": "https://www.speedrun.com/sms",
+    "ruleset": {
+      "show-milliseconds": true,
+      "require-verification": true,
+      "require-video": false,
+      "run-times": [
+        "realtime"
+      ],
+      "default-time": "realtime",
+      "emulators-allowed": true
+    },
+    "categories": {
+      "data": [
+        {
+          "id": "n2y3r8do",
+          "name": "Any%",
+          "type": "per-game"
+        },
+        {
+          "id": "z27o9gd0",
+          "name": "120 Shines",
+          "type": "per-game"
+        },
+        {
+          "id": "xk9n9y20",
+          "name": "96 Shines",
+          "type": "per-game"
+        },
+        {
+          "id": "7kjqlxd3",
+          "name": "79 Shines",
+          "type": "per-game"
+        }
+      ]
+    },
+    "variables": {
+      "data": [
+        {
+          "id": "2lggwk6l",
+          "name": "Timing Method",
+          "category": null,
+          "scope": {
+            "type": "full-game"
+          },
+          "is-subcategory": false,
+          "values": {
+            "values": {
+              "gq7zyon1": {
+                "label": "New File"
+              },
+              "jqzyow4l": {
+                "label": "Peach File"
+              },
+              "21gok6xq": {
+                "label": "Hacked File"
+              }
+            },
+            "default": null
+          }
+        },
+        {
+          "id": "j845md4n",
+          "name": "Game Version",
+          "category": null,
+          "scope": {
+            "type": "global"
+          },
+          "is-subcategory": true,
+          "values": {
+            "values": {
+              "gq7on0vl": {
+                "label": "GCN"
+              },
+              "21g6jvnq": {
+                "label": "3DAS"
+              },
+              "qznwp64q": {
+                "label": "NSO"
+              }
+            },
+            "default": "gq7on0vl"
+          }
+        },
+        {
+          "id": "ylqxgz78",
+          "name": "Arbitrary Code Execution",
+          "category": "n2y3r8do",
+          "scope": {
+            "type": "full-game"
+          },
+          "is-subcategory": true,
+          "values": {
+            "values": {
+              "1gn4rz8l": {
+                "label": "No ACE"
+              },
+              "qzn57z8q": {
+                "label": "ACE"
+              }
+            },
+            "default": "1gn4rz8l"
+          }
+        }
+      ]
+    },
+    "platforms": {
+      "data": [
+        {
+          "id": "4p9z06rn",
+          "name": "GameCube"
+        },
+        {
+          "id": "v06dk3e4",
+          "name": "Wii"
+        },
+        {
+          "id": "7m6ylw9p",
+          "name": "Switch"
+        },
+        {
+          "id": "3167lw9q",
+          "name": "Switch 2"
+        }
+      ]
+    },
+    "regions": {
+      "data": [
+        {
+          "id": "pr184lqn",
+          "name": "USA / NTSC"
+        },
+        {
+          "id": "e6lxy1dz",
+          "name": "EUR / PAL"
+        },
+        {
+          "id": "o316x197",
+          "name": "JPN / NTSC"
+        },
+        {
+          "id": "p2g50lnk",
+          "name": "KOR / NTSC"
+        }
+      ]
+    }
+  }
+}

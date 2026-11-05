@@ -87,6 +87,8 @@ pub struct RustSplitApp {
     last_title: String,
     dialog_expanded: bool,
     overlay_size_before_dialog: Option<egui::Vec2>,
+    #[cfg(feature = "speedrun-com")]
+    world_records: crate::speedrun_com::WorldRecordService,
 }
 
 impl RustSplitApp {
@@ -142,6 +144,8 @@ impl RustSplitApp {
             last_title: String::new(),
             dialog_expanded: false,
             overlay_size_before_dialog: None,
+            #[cfg(feature = "speedrun-com")]
+            world_records: Default::default(),
         };
         app.hotkeys.re_register(&app.config.hotkeys);
         if app.config.server.enabled && app.config.server.autostart {
@@ -946,6 +950,22 @@ impl RustSplitApp {
                     &mut draft.general.autosave_layout,
                     "Autosave layout after applying",
                 );
+                #[cfg(feature = "speedrun-com")]
+                {
+                    ui.separator();
+                    ui.heading("speedrun.com");
+                    ui.checkbox(
+                        &mut draft.speedrun_com.fetch_world_records,
+                        "Fetch world records from speedrun.com",
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Used by the World Record component. Sends the game, category and filters to speedrun.com.",
+                        )
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                }
                 if niri::is_session() {
                     ui.separator();
                     ui.heading("Niri");
@@ -1203,6 +1223,15 @@ impl RustSplitApp {
     fn draw_overlay_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
+        #[cfg(feature = "speedrun-com")]
+        {
+            self.renderer.world_record = self.world_records.update(
+                &ctx,
+                self.config.speedrun_com.fetch_world_records,
+                &self.layout,
+                &self.timer,
+            );
+        }
         self.renderer.draw(ui, &self.layout, &self.timer);
 
         // Whole-window drag support.  Buttons and dialogs sit above this

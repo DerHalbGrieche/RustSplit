@@ -1,0 +1,69 @@
+{
+  "data": {
+    "weblink": "https://www.speedrun.com/sms?h=Any-gcn-no-ace&x=n2y3r8do-j845md4n.gq7on0vl-ylqxgz78.1gn4rz8l",
+    "game": "v1pxjz68",
+    "category": "n2y3r8do",
+    "level": null,
+    "platform": null,
+    "region": null,
+    "emulators": null,
+    "video-only": false,
+    "timing": "realtime",
+    "values": {
+      "j845md4n": "gq7on0vl",
+      "ylqxgz78": "1gn4rz8l"
+    },
+    "runs": [
+      {
+        "place": 1,
+        "run": {
+          "id": "zxrpn9kz",
+          "weblink": "https://www.speedrun.com/sms/runs/zxrpn9kz",
+          "game": "v1pxjz68",
+          "category": "n2y3r8do",
+          "players": [
+            {
+              "rel": "user",
+              "id": "8dwepdmj",
+              "uri": "https://www.speedrun.com/api/v1/users/8dwepdmj"
+            }
+          ],
+          "date": "2026-10-21",
+          "times": {
+            "primary": "PT1H12M6S",
+            "primary_t": 4326,
+            "realtime": "PT1H12M6S",
+            "realtime_t": 4326,
+            "realtime_noloads": null,
+            "realtime_noloads_t": 0,
+            "ingame": null,
+            "ingame_t": 0
+          },
+          "system": {
+            "platform": "v06dk3e4",
+            "emulated": false,
+            "region": "o316x197"
+          },
+          "values": {
+            "2lggwk6l": "21gok6xq",
+            "j845md4n": "gq7on0vl",
+            "ylqxgz78": "1gn4rz8l"
+          }
+        }
+      }
+    ],
+    "players": {
+      "data": [
+        {
+          "rel": "user",
+          "id": "8dwepdmj",
+          "names": {
+            "international": "inkstar",
+            "japanese": null
+          },
+          "weblink": "https://www.speedrun.com/users/inkstar"
+        }
+      ]
+    }
+  }
+}

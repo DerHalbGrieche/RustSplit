@@ -10,12 +10,15 @@ use crate::canvas::paint_background;
 use crate::components::ComponentContext;
 use crate::icon::IconCache;
 use crate::layout::{BackgroundStyle, Layout, LayoutMode, LayoutSettings};
+use crate::world_record::WorldRecord;
 
 pub struct Renderer {
     pub icons: IconCache,
     /// Last rectangle used for each component, in screen coordinates.  Useful
     /// for editors and debugging.
     pub last_component_rects: Vec<Rect>,
+    /// External world record data for the World Record component.
+    pub world_record: Option<WorldRecord>,
     background: Option<(PathBuf, TextureHandle)>,
 }
 
@@ -24,6 +27,7 @@ impl Default for Renderer {
         Self {
             icons: IconCache::new(),
             last_component_rects: Vec::new(),
+            world_record: None,
             background: None,
         }
     }
@@ -151,6 +155,7 @@ impl Renderer {
         let image_opacity = layout.settings.image_opacity.clamp(0.0, 1.0);
         let icons = &mut self.icons;
         let last_rects = &mut self.last_component_rects;
+        let world_record = self.world_record.as_ref();
 
         root.with_visual_transform(transform, |ui| {
             // Layout background image.
@@ -216,6 +221,7 @@ impl Renderer {
                             &render_theme
                         };
                         let mut ctx = ComponentContext::new(timer, theme, icons, 1.0);
+                        ctx.world_record = world_record;
                         component.component.draw(ui, rect, &mut ctx);
                         y += height;
                     }
@@ -254,6 +260,7 @@ impl Renderer {
                             &render_theme
                         };
                         let mut ctx = ComponentContext::new(timer, theme, icons, 1.0);
+                        ctx.world_record = world_record;
                         component.component.draw(ui, rect, &mut ctx);
                         x += width;
                     }

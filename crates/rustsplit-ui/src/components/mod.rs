@@ -15,6 +15,7 @@ pub use settings::*;
 
 use crate::icon::IconCache;
 use crate::layout::{FontSpec, LayoutSettings};
+use crate::world_record::WorldRecord;
 use crate::xml::XmlElement;
 
 /// Everything a component renderer needs beyond its own settings.
@@ -23,6 +24,8 @@ pub struct ComponentContext<'a> {
     pub theme: &'a LayoutSettings,
     pub icons: &'a mut IconCache,
     pub scale: f32,
+    /// World record supplied by the application, if it fetched one.
+    pub world_record: Option<&'a WorldRecord>,
 }
 
 impl<'a> ComponentContext<'a> {
@@ -37,6 +40,7 @@ impl<'a> ComponentContext<'a> {
             theme,
             icons,
             scale: scale.max(0.1),
+            world_record: None,
         }
     }
 
