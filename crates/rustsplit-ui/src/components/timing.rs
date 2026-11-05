@@ -157,10 +157,7 @@ fn parse_digits_format(value: Option<&str>, default: DigitsFormat) -> DigitsForm
 
 /// Parse LiveSplit's combined timer format (`1.23`, `01.2`, `0:00:01.234`).
 fn parse_timer_format(value: &str) -> Option<(DigitsFormat, TimeAccuracy)> {
-    let (digits, decimals) = value
-        .split_once('.')
-        .map(|(digits, decimals)| (digits, decimals))
-        .unwrap_or((value, ""));
+    let (digits, decimals) = value.split_once('.').unwrap_or((value, ""));
     let digits_format = parse_digits_format(Some(digits), DigitsFormat::SingleDigitSeconds);
     let accuracy = match decimals {
         "" => TimeAccuracy::Seconds,
@@ -604,11 +601,11 @@ fn possible_time_save_for_segment(
         }
         index -= 1;
         best_segments += timer
-                .run
-                .segments
-                .get(index as usize)?
-                .best_segment_time
-                .get(method)?;
+            .run
+            .segments
+            .get(index as usize)?
+            .best_segment_time
+            .get(method)?;
     }
 
     let comparison_time = timer

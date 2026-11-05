@@ -16,7 +16,6 @@ pub struct AppConfig {
     pub niri: NiriConfig,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
@@ -57,7 +56,6 @@ pub struct HotkeyConfig {
     pub edit_layout: String,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
@@ -87,7 +85,6 @@ pub struct WindowConfig {
     pub x: Option<f32>,
     pub y: Option<f32>,
 }
-
 
 /// Niri-specific overlay geometry.
 ///

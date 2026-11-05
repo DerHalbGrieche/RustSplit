@@ -99,17 +99,19 @@ pub fn parse_layout(data: impl AsRef<[u8]>) -> Result<Layout, LayoutXmlError> {
         )));
     }
     let version = LayoutVersion::parse(root.attributes.get("version").map(String::as_str));
-    let mut layout = Layout::default();
-    layout.mode = LayoutMode::parse(
-        child_text(&root, "Mode").as_deref().unwrap_or("Vertical"),
-        LayoutMode::Vertical,
-    );
-    layout.x = parse_i32(child_text(&root, "X").as_deref(), 100);
-    layout.y = parse_i32(child_text(&root, "Y").as_deref(), 100);
-    layout.vertical_width = parse_i32(child_text(&root, "VerticalWidth").as_deref(), 286);
-    layout.vertical_height = parse_i32(child_text(&root, "VerticalHeight").as_deref(), 519);
-    layout.horizontal_width = parse_i32(child_text(&root, "HorizontalWidth").as_deref(), -1);
-    layout.horizontal_height = parse_i32(child_text(&root, "HorizontalHeight").as_deref(), -1);
+    let mut layout = Layout {
+        mode: LayoutMode::parse(
+            child_text(&root, "Mode").as_deref().unwrap_or("Vertical"),
+            LayoutMode::Vertical,
+        ),
+        x: parse_i32(child_text(&root, "X").as_deref(), 100),
+        y: parse_i32(child_text(&root, "Y").as_deref(), 100),
+        vertical_width: parse_i32(child_text(&root, "VerticalWidth").as_deref(), 286),
+        vertical_height: parse_i32(child_text(&root, "VerticalHeight").as_deref(), 519),
+        horizontal_width: parse_i32(child_text(&root, "HorizontalWidth").as_deref(), -1),
+        horizontal_height: parse_i32(child_text(&root, "HorizontalHeight").as_deref(), -1),
+        ..Layout::default()
+    };
     if let Some(settings) = child(&root, "Settings") {
         layout.settings = parse_layout_settings(settings, &layout.settings, version);
     }

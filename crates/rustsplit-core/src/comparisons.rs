@@ -615,8 +615,7 @@ fn generate_aggregate_comparison(
 ) {
     let mut total_time: Option<TimeSpan> = Some(TimeSpan::ZERO);
 
-    for index in 0..run.segments.len() {
-        let values = &history[index];
+    for (index, values) in history.iter().enumerate().take(run.segments.len()) {
         if values.is_empty() {
             total_time = None;
         }
@@ -759,16 +758,15 @@ fn generate_latest_run_for_method(run: &mut Run, method: TimingMethod) {
         }
 
         match run.segments[index].segment_history.get(&attempt).copied() {
-            Some(history_time) => match history_time.get(method) {
-                Some(segment_time) => {
-                    total_time += segment_time;
-                    set_comparison_method(run, LATEST_RUN, index, method, Some(total_time));
-                }
+            Some(history_time) => {
                 // A skipped segment has no split time.  The running total is
                 // deliberately left untouched: LiveSplit resumes it at the
                 // next recorded segment.
-                None => {}
-            },
+                if let Some(segment_time) = history_time.get(method) {
+                    total_time += segment_time;
+                    set_comparison_method(run, LATEST_RUN, index, method, Some(total_time));
+                }
+            }
             // The attempt ended before this segment.
             None => attempt_continues = false,
         }

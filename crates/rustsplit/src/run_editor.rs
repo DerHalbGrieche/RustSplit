@@ -509,10 +509,12 @@ fn time_edit(
     let buffer = buffers.entry(key.to_string()).or_insert_with(|| {
         value
             .map(|time| {
-                let mut formatter = rustsplit_core::GeneralTimeFormatter::default();
-                formatter.accuracy = TimeAccuracy::Milliseconds;
-                formatter.null_format = rustsplit_core::NullFormat::ZeroValue;
-                formatter.show_days = false;
+                let formatter = rustsplit_core::GeneralTimeFormatter {
+                    accuracy: TimeAccuracy::Milliseconds,
+                    null_format: rustsplit_core::NullFormat::ZeroValue,
+                    show_days: false,
+                    ..Default::default()
+                };
                 formatter.format(Some(time))
             })
             .unwrap_or_default()
@@ -534,9 +536,11 @@ fn time_edit(
     }
     if response.lost_focus() {
         if let Some(time) = *value {
-            let mut formatter = rustsplit_core::GeneralTimeFormatter::default();
-            formatter.accuracy = TimeAccuracy::Milliseconds;
-            formatter.null_format = rustsplit_core::NullFormat::ZeroValue;
+            let formatter = rustsplit_core::GeneralTimeFormatter {
+                accuracy: TimeAccuracy::Milliseconds,
+                null_format: rustsplit_core::NullFormat::ZeroValue,
+                ..Default::default()
+            };
             *buffer = formatter.format(Some(time));
         } else {
             buffer.clear();

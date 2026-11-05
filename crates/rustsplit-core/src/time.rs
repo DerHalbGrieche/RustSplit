@@ -220,9 +220,11 @@ impl TimeSpan {
 
     /// A compact representation used in labels, e.g. `1:23.4`.
     pub fn to_short_string(self, accuracy: crate::format::TimeAccuracy) -> String {
-        let mut formatter = crate::format::GeneralTimeFormatter::default();
-        formatter.accuracy = accuracy;
-        formatter.drop_decimals = true;
+        let formatter = crate::format::GeneralTimeFormatter {
+            accuracy,
+            drop_decimals: true,
+            ..Default::default()
+        };
         formatter.format(Some(self))
     }
 }
@@ -403,32 +405,6 @@ impl Time {
         Self::from_method(method, value)
     }
 
-    pub fn add(self, other: Self) -> Self {
-        Self {
-            real_time: match (self.real_time, other.real_time) {
-                (Some(a), Some(b)) => a.checked_add(b),
-                _ => None,
-            },
-            game_time: match (self.game_time, other.game_time) {
-                (Some(a), Some(b)) => a.checked_add(b),
-                _ => None,
-            },
-        }
-    }
-
-    pub fn sub(self, other: Self) -> Self {
-        Self {
-            real_time: match (self.real_time, other.real_time) {
-                (Some(a), Some(b)) => a.checked_sub(b),
-                _ => None,
-            },
-            game_time: match (self.game_time, other.game_time) {
-                (Some(a), Some(b)) => a.checked_sub(b),
-                _ => None,
-            },
-        }
-    }
-
     /// Merge only the fields that are set in `other`.
     pub fn overlay(self, other: Self) -> Self {
         Self {
@@ -441,16 +417,38 @@ impl Time {
 impl Add for Time {
     type Output = Time;
 
+    /// Adds each timing method separately.  A method is `None` in the result
+    /// when either side is missing it or the sum overflows.
     fn add(self, rhs: Self) -> Self::Output {
-        self.add(rhs)
+        Self {
+            real_time: match (self.real_time, rhs.real_time) {
+                (Some(a), Some(b)) => a.checked_add(b),
+                _ => None,
+            },
+            game_time: match (self.game_time, rhs.game_time) {
+                (Some(a), Some(b)) => a.checked_add(b),
+                _ => None,
+            },
+        }
     }
 }
 
 impl Sub for Time {
     type Output = Time;
 
+    /// Subtracts each timing method separately.  A method is `None` in the
+    /// result when either side is missing it or the difference overflows.
     fn sub(self, rhs: Self) -> Self::Output {
-        self.sub(rhs)
+        Self {
+            real_time: match (self.real_time, rhs.real_time) {
+                (Some(a), Some(b)) => a.checked_sub(b),
+                _ => None,
+            },
+            game_time: match (self.game_time, rhs.game_time) {
+                (Some(a), Some(b)) => a.checked_sub(b),
+                _ => None,
+            },
+        }
     }
 }
 

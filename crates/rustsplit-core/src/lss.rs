@@ -51,17 +51,19 @@ pub fn load_run_from_str(data: &str) -> Result<Run, LssError> {
         )));
     }
 
-    let mut run = Run::default();
-    run.game_name = child_text(&root, "GameName").unwrap_or_default();
-    run.category_name = child_text(&root, "CategoryName").unwrap_or_default();
-    run.layout_path = child_text(&root, "LayoutPath").filter(|path| !path.is_empty());
-    run.game_icon = child(&root, "GameIcon").and_then(decode_image);
-    run.offset = child_text(&root, "Offset")
-        .and_then(|value| TimeSpan::parse(&value).ok())
-        .unwrap_or_default();
-    run.attempt_count = child_text(&root, "AttemptCount")
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(0);
+    let mut run = Run {
+        game_name: child_text(&root, "GameName").unwrap_or_default(),
+        category_name: child_text(&root, "CategoryName").unwrap_or_default(),
+        layout_path: child_text(&root, "LayoutPath").filter(|path| !path.is_empty()),
+        game_icon: child(&root, "GameIcon").and_then(decode_image),
+        offset: child_text(&root, "Offset")
+            .and_then(|value| TimeSpan::parse(&value).ok())
+            .unwrap_or_default(),
+        attempt_count: child_text(&root, "AttemptCount")
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0),
+        ..Run::default()
+    };
 
     if let Some(metadata) = child(&root, "Metadata") {
         run.metadata = parse_metadata(metadata);
@@ -136,7 +138,9 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, LssError> {
         ));
     }
     let units = bytes
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             if little_endian {
                 u16::from_le_bytes([pair[0], pair[1]])

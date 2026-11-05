@@ -287,11 +287,13 @@ mod tests {
 
     #[test]
     fn save_path_gets_an_extension() {
-        let mut dialog = FileDialog::default();
-        dialog.mode = FileDialogMode::Save;
-        dialog.directory = PathBuf::from("/tmp");
-        dialog.filename = "Run".to_string();
-        dialog.extensions = vec!["lss".to_string()];
+        let dialog = FileDialog {
+            mode: FileDialogMode::Save,
+            directory: PathBuf::from("/tmp"),
+            filename: "Run".to_string(),
+            extensions: vec!["lss".to_string()],
+            ..FileDialog::default()
+        };
         assert_eq!(
             dialog.selected_path().unwrap(),
             PathBuf::from("/tmp/Run.lss")
@@ -300,8 +302,10 @@ mod tests {
 
     #[test]
     fn extension_filter_is_case_insensitive() {
-        let mut dialog = FileDialog::default();
-        dialog.extensions = vec!["lss".to_string()];
+        let dialog = FileDialog {
+            extensions: vec!["lss".to_string()],
+            ..FileDialog::default()
+        };
         assert!(dialog.matches_extension(Path::new("Run.LSS")));
         assert!(!dialog.matches_extension(Path::new("Run.lsl")));
     }

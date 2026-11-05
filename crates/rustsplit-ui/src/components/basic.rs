@@ -2308,21 +2308,25 @@ mod tests {
 
     #[test]
     fn title_round_trip() {
-        let mut settings = TitleSettings::default();
-        settings.show_game_name = false;
-        settings.show_attempt_count = false;
-        settings.show_finished_runs_count = true;
-        settings.text_alignment = 2;
-        settings.single_line = true;
-        settings.display_game_icon = false;
-        settings.show_region = true;
-        settings.show_platform = true;
-        settings.show_variables = false;
-        settings.override_title_color = true;
-        settings.title_color = Color32::from_rgb(1, 2, 3);
-        settings.background =
-            BackgroundStyle::vertical(Color32::from_rgb(10, 20, 30), Color32::from_rgb(40, 50, 60));
-        settings.override_title_font = true;
+        let mut settings = TitleSettings {
+            show_game_name: false,
+            show_attempt_count: false,
+            show_finished_runs_count: true,
+            text_alignment: 2,
+            single_line: true,
+            display_game_icon: false,
+            show_region: true,
+            show_platform: true,
+            show_variables: false,
+            override_title_color: true,
+            title_color: Color32::from_rgb(1, 2, 3),
+            background: BackgroundStyle::vertical(
+                Color32::from_rgb(10, 20, 30),
+                Color32::from_rgb(40, 50, 60),
+            ),
+            override_title_font: true,
+            ..TitleSettings::default()
+        };
         settings.title_font.size = 22.0;
         settings.title_font.bold = true;
 
@@ -2348,13 +2352,15 @@ mod tests {
 
     #[test]
     fn text_counter_and_comparison_round_trip() {
-        let mut text = TextSettings::default();
-        text.text1 = "{Game}".to_string();
-        text.text2 = "ignored".to_string();
-        text.custom_variable = "Route".to_string();
-        text.override_time_color = true;
-        text.time_color = Color32::from_rgb(7, 8, 9);
-        text.display_2_rows = true;
+        let text = TextSettings {
+            text1: "{Game}".to_string(),
+            text2: "ignored".to_string(),
+            custom_variable: "Route".to_string(),
+            override_time_color: true,
+            time_color: Color32::from_rgb(7, 8, 9),
+            display_2_rows: true,
+            ..TextSettings::default()
+        };
         let parsed = text_from_xml(&round_trip(&text_to_xml(&text)));
         assert_eq!(parsed.text1, "{Game}");
         assert_eq!(parsed.text2, "Route");
@@ -2363,14 +2369,16 @@ mod tests {
         assert!(parsed.override_time_color);
         assert!(parsed.display_2_rows);
 
-        let mut counter = CounterSettings::default();
-        counter.counter_text = "Deaths".to_string();
-        counter.initial_value = -3;
-        counter.increment = 2;
-        counter.increment_key = "F1".to_string();
-        counter.decrement_key = "F2".to_string();
-        counter.reset_key = "F3".to_string();
-        counter.global_hotkeys_enabled = true;
+        let counter = CounterSettings {
+            counter_text: "Deaths".to_string(),
+            initial_value: -3,
+            increment: 2,
+            increment_key: "F1".to_string(),
+            decrement_key: "F2".to_string(),
+            reset_key: "F3".to_string(),
+            global_hotkeys_enabled: true,
+            ..CounterSettings::default()
+        };
         let parsed = counter_from_xml(&round_trip(&counter_to_xml(&counter)));
         assert_eq!(parsed.counter_text, "Deaths");
         assert_eq!(parsed.initial_value, -3);
@@ -2380,12 +2388,14 @@ mod tests {
         assert_eq!(parsed.reset_key, "F3");
         assert!(parsed.global_hotkeys_enabled);
 
-        let mut comparison = ComparisonTimeSettings::default();
-        comparison.comparison = "Best Segments".to_string();
-        comparison.timing_method = TimingMethodSetting::GameTime;
-        comparison.accuracy = TimeAccuracy::Hundredths;
-        comparison.kind = 2;
-        comparison.split_index = 4;
+        let comparison = ComparisonTimeSettings {
+            comparison: "Best Segments".to_string(),
+            timing_method: TimingMethodSetting::GameTime,
+            accuracy: TimeAccuracy::Hundredths,
+            kind: 2,
+            split_index: 4,
+            ..ComparisonTimeSettings::default()
+        };
         let parsed = comparison_time_from_xml(&round_trip(&comparison_time_to_xml(&comparison)));
         assert_eq!(parsed.comparison, "Best Segments");
         assert_eq!(parsed.timing_method, TimingMethodSetting::GameTime);
@@ -2396,16 +2406,18 @@ mod tests {
 
     #[test]
     fn world_record_and_sum_of_best_round_trip() {
-        let mut record = WorldRecordSettings::default();
-        record.override_time_color = true;
-        record.time_color = Color32::from_rgb(200, 100, 50);
-        record.timing_method = TimingMethodSetting::RealTime;
-        record.centered_text = true;
-        record.precision_type = 2;
-        record.filter_platform = "true".to_string();
-        record.filter_region = String::new();
-        record.filter_subcategories = true;
-        record.filter_variables = true;
+        let record = WorldRecordSettings {
+            override_time_color: true,
+            time_color: Color32::from_rgb(200, 100, 50),
+            timing_method: TimingMethodSetting::RealTime,
+            centered_text: true,
+            precision_type: 2,
+            filter_platform: "true".to_string(),
+            filter_region: String::new(),
+            filter_subcategories: true,
+            filter_variables: true,
+            ..WorldRecordSettings::default()
+        };
         let parsed = world_record_from_xml(&round_trip(&world_record_to_xml(&record)));
         assert_eq!(parsed.time_color, record.time_color);
         assert!(parsed.override_time_color);
@@ -2417,13 +2429,15 @@ mod tests {
         assert!(parsed.filter_subcategories);
         assert!(parsed.filter_variables);
 
-        let mut sum = SumOfBestSettings::default();
-        sum.accuracy = TimeAccuracy::Tenths;
-        sum.override_text_color = true;
-        sum.text_color = Color32::from_rgb(1, 1, 1);
-        sum.override_time_color = true;
-        sum.time_color = Color32::from_rgb(2, 2, 2);
-        sum.display_2_rows = true;
+        let sum = SumOfBestSettings {
+            accuracy: TimeAccuracy::Tenths,
+            override_text_color: true,
+            text_color: Color32::from_rgb(1, 1, 1),
+            override_time_color: true,
+            time_color: Color32::from_rgb(2, 2, 2),
+            display_2_rows: true,
+            ..SumOfBestSettings::default()
+        };
         let parsed = sum_of_best_from_xml(&round_trip(&sum_of_best_to_xml(&sum)));
         assert_eq!(parsed.accuracy, TimeAccuracy::Tenths);
         assert!(parsed.override_text_color);

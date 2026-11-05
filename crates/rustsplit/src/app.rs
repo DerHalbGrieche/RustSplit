@@ -1291,6 +1291,9 @@ impl RustSplitApp {
         let monitor = ctx
             .input(|input| input.viewport().monitor_size)
             .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
+        // Not `f32::clamp`: min/max maps a NaN monitor size to the upper bound
+        // instead of propagating NaN into the viewport size.
+        #[expect(clippy::manual_clamp, reason = "keeps the NaN handling of min/max")]
         let target = egui::vec2(
             (monitor.x - 24.0).min(1060.0).max(640.0),
             (monitor.y - 48.0).min(820.0).max(480.0),
