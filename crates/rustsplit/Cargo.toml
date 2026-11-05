@@ -15,13 +15,15 @@ name = "rustsplit"
 path = "src/main.rs"
 
 [features]
-default = ["native-dialogs", "speedrun-com"]
+default = ["native-dialogs", "sounds", "speedrun-com"]
 # Use the platform's file dialogs (XDG desktop portal on Linux), falling back
 # to the built-in egui browser when they are unavailable.
 native-dialogs = ["dep:rfd", "dep:pollster"]
 # Fetch world records from speedrun.com for the World Record component. Still
 # opt-in at runtime through settings.toml.
 speedrun-com = ["dep:ureq"]
+# Timer sound effects through rodio (needs ALSA on Linux).
+sounds = ["dep:rodio"]
 
 [dependencies]
 rustsplit-core.workspace = true
@@ -39,6 +41,7 @@ image.workspace = true
 log.workspace = true
 pollster = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
+rodio = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

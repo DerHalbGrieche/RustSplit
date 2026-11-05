@@ -93,6 +93,9 @@ The desktop application and integration layer:
   the World Record component. A background thread resolves the game and
   category and fetches the leaderboard's top run; the app hands the cached
   `WorldRecord` to the renderer, so `rustsplit-ui` stays free of networking.
+- `sounds.rs` — timer sound effects: detects events by comparing timer
+  snapshots before and after each action and plays them on an audio worker
+  thread (rodio, behind the default `sounds` feature).
 
 ## Data flow
 

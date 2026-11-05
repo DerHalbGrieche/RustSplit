@@ -20,6 +20,7 @@ use crate::hotkeys::{GlobalHotkeys, HotkeyAction};
 use crate::layout_editor::{LayoutEditor, LayoutEditorEvent};
 use crate::niri::{self, DesiredWindow, NiriIntegration};
 use crate::run_editor::{RunEditor, RunEditorEvent};
+use crate::sounds::{self, SoundEvent, SoundPlayer};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
@@ -59,6 +60,7 @@ enum FilePurpose {
     SaveRun,
     OpenLayout,
     SaveLayout,
+    Sound(SoundEvent),
 }
 
 pub struct RustSplitApp {
@@ -90,6 +92,7 @@ pub struct RustSplitApp {
     overlay_size_before_dialog: Option<egui::Vec2>,
     #[cfg(feature = "speedrun-com")]
     world_records: crate::speedrun_com::WorldRecordService,
+    sounds: SoundPlayer,
 }
 
 impl RustSplitApp {
@@ -147,10 +150,12 @@ impl RustSplitApp {
             overlay_size_before_dialog: None,
             #[cfg(feature = "speedrun-com")]
             world_records: Default::default(),
+            sounds: SoundPlayer::default(),
         };
         app.hotkeys.re_register(&app.config.hotkeys);
         app.file_dialog
             .set_prefer_native(app.config.general.use_system_file_dialogs);
+        app.sounds.preload(&app.config.sounds);
         if app.config.server.enabled && app.config.server.autostart {
             app.start_server(&cc.egui_ctx);
         }
@@ -170,8 +175,18 @@ impl RustSplitApp {
     fn apply_actions(&mut self, ctx: &Context) {
         let actions = std::mem::take(&mut self.pending_actions);
         for action in actions {
+            let before = sounds::Snapshot::capture(&self.timer);
             self.apply_action(ctx, action);
+            self.play_timer_sounds(&before);
         }
+    }
+
+    /// The single hook for timer sounds. Every timer action (shortcuts,
+    /// hotkeys, menu, server and control socket) captures a snapshot before it
+    /// runs and calls this afterwards.
+    fn play_timer_sounds(&mut self, before: &sounds::Snapshot) {
+        self.sounds
+            .play_timer_change(before, &self.timer, &self.config.sounds);
     }
 
     fn apply_action(&mut self, ctx: &Context, action: Action) {
@@ -502,6 +517,11 @@ impl RustSplitApp {
                     Err(error) => self.set_status(format!("Could not save layout: {error}")),
                 }
             }
+            Some(FilePurpose::Sound(event)) => {
+                if let Some(draft) = self.settings_draft.as_mut() {
+                    *event.path_mut(&mut draft.sounds) = Some(path);
+                }
+            }
             None => {}
         }
     }
@@ -801,7 +821,9 @@ impl RustSplitApp {
         }
 
         let autosave = server_command_mutates_run(command);
+        let before = sounds::Snapshot::capture(&self.timer);
         let outcome = handle_command(&mut self.timer, command);
+        self.play_timer_sounds(&before);
         let response = outcome.response.clone();
         if outcome.save {
             let _ = self.save_current_run(false);
@@ -891,6 +913,8 @@ impl RustSplitApp {
         };
         let mut open = self.settings_open;
         let mut apply = false;
+        let mut browse_sound = None;
+        let sound_player = &mut self.sounds;
         let hotkey_error = self.hotkeys.error.clone();
         let server_error = self.server_error.clone();
         egui::Window::new("Settings")
@@ -991,6 +1015,9 @@ impl RustSplitApp {
                         .color(ui.visuals().weak_text_color()),
                     );
                 }
+                ui.separator();
+                ui.heading("Sounds");
+                browse_sound = sounds::settings_ui(ui, &mut draft.sounds, sound_player);
                 if niri::is_session() {
                     ui.separator();
                     ui.heading("Niri");
@@ -1019,6 +1046,21 @@ impl RustSplitApp {
                     });
             });
         self.settings_open = open;
+        if let Some(event) = browse_sound.filter(|_| open) {
+            let start = self
+                .settings_draft
+                .as_ref()
+                .and_then(|draft| event.path(&draft.sounds))
+                .map(Path::to_path_buf);
+            self.file_dialog.open(
+                FileDialogMode::Open,
+                format!("Choose Sound: {}", event.label()),
+                start.as_deref(),
+                "",
+                &["wav", "ogg", "oga", "mp3", "flac"],
+            );
+            self.file_purpose = Some(FilePurpose::Sound(event));
+        }
         if apply || !open {
             let old_config = self.config.clone();
             if let Some(draft) = self.settings_draft.take() {
@@ -1036,6 +1078,7 @@ impl RustSplitApp {
                 }
             }
             self.sync_niri();
+            self.sounds.preload(&self.config.sounds);
             self.save_config();
             if !self.settings_open {
                 self.settings_draft = None;

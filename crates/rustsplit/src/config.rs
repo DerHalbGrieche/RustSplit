@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub window: WindowConfig,
     pub niri: NiriConfig,
     pub speedrun_com: SpeedrunComConfig,
+    pub sounds: SoundConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,6 +129,48 @@ pub struct SpeedrunComConfig {
     pub fetch_world_records: bool,
 }
 
+/// Sound files played on timer events, like LiveSplit's Sound Settings.
+///
+/// Every path is optional; unset events are silent. `volume` is the general
+/// volume from 0 to 100, where 100 plays files at their recorded level.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundConfig {
+    pub volume: u8,
+    pub split: Option<PathBuf>,
+    pub split_ahead: Option<PathBuf>,
+    pub split_behind: Option<PathBuf>,
+    pub best_segment: Option<PathBuf>,
+    pub undo_split: Option<PathBuf>,
+    pub skip_split: Option<PathBuf>,
+    pub personal_best: Option<PathBuf>,
+    pub not_a_personal_best: Option<PathBuf>,
+    pub reset: Option<PathBuf>,
+    pub pause: Option<PathBuf>,
+    pub resume: Option<PathBuf>,
+    pub start_timer: Option<PathBuf>,
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            volume: 100,
+            split: None,
+            split_ahead: None,
+            split_behind: None,
+            best_segment: None,
+            undo_split: None,
+            skip_split: None,
+            personal_best: None,
+            not_a_personal_best: None,
+            reset: None,
+            pause: None,
+            resume: None,
+            start_timer: None,
+        }
+    }
+}
+
 impl AppConfig {
     pub fn default_path() -> PathBuf {
         ProjectDirs::from("org", "RustSplit", "rustsplit")
@@ -218,5 +261,31 @@ mod tests {
         assert!(data.contains("use_system_file_dialogs = false"));
         let loaded: AppConfig = toml::from_str(&data).unwrap();
         assert!(!loaded.general.use_system_file_dialogs);
+    }
+
+    #[test]
+    fn sound_config_roundtrips() {
+        let mut config = AppConfig::default();
+        config.sounds.volume = 35;
+        config.sounds.split = Some(PathBuf::from("/sounds/split.wav"));
+        config.sounds.personal_best = Some(PathBuf::from("/sounds/pb.ogg"));
+        let data = toml::to_string_pretty(&config).unwrap();
+        assert!(data.contains("[sounds]"));
+        let loaded: AppConfig = toml::from_str(&data).unwrap();
+        assert_eq!(loaded.sounds, config.sounds);
+        assert_eq!(loaded.sounds.reset, None);
+    }
+
+    #[test]
+    fn config_without_sounds_uses_defaults() {
+        let loaded: AppConfig =
+            toml::from_str("[general]\nautosave = false\n\n[server]\nport = 23456\n").unwrap();
+        assert!(!loaded.general.autosave);
+        assert_eq!(loaded.sounds, SoundConfig::default());
+        assert_eq!(loaded.sounds.volume, 100);
+
+        let partial: AppConfig = toml::from_str("[sounds]\nreset = \"reset.mp3\"\n").unwrap();
+        assert_eq!(partial.sounds.reset, Some(PathBuf::from("reset.mp3")));
+        assert_eq!(partial.sounds.volume, 100);
     }
 }

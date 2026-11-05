@@ -9,6 +9,7 @@ mod hotkeys;
 mod layout_editor;
 mod niri;
 mod run_editor;
+mod sounds;
 #[cfg(feature = "speedrun-com")]
 mod speedrun_com;
 

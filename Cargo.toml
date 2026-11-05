@@ -35,6 +35,7 @@ pollster = "0.4.0"
 # Native file dialogs. Only the D-Bus portal backend is enabled on Linux: it
 # dlopens libdbus at runtime, so there is no GTK or async-runtime dependency.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "wav", "vorbis", "mp3", "flac"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.17"
