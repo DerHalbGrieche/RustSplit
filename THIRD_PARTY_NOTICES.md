@@ -23,8 +23,12 @@ The full MIT permission notice is reproduced in the root `LICENSE` file.
 - **License:** MIT OR Apache-2.0
 - **Copyright:** LiveSplit contributors
 - **Material used:** Algorithmic reference for timer state handling,
-  comparisons and split-file parsing. No livesplit-core code is linked into
-  this project.
+  comparisons and split-file parsing. With the default `auto-splitting`
+  feature, livesplit-core's `livesplit-auto-splitting` crate (MIT OR
+  Apache-2.0) is linked as the WebAssembly auto splitter runtime, together
+  with its dependencies (wasmtime, Apache-2.0 WITH LLVM-exception). The
+  `.lss` auto splitter settings format follows livesplit-core's
+  `StoredAutoSplitterSettings`.
 
 ## DejaVu fonts
 

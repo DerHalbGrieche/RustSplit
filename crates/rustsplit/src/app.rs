@@ -12,6 +12,7 @@ use rustsplit_core::{load_run, save_run, Run, Timer, TimerPhase, TimingMethod};
 use rustsplit_server::{handle_command, parse_command, ServerCommand, ServerHandle};
 use rustsplit_ui::{configure_fonts, load_layout, save_layout, Layout, LayoutMode, Renderer};
 
+use crate::auto_splitter::AutoSplitterUi;
 use crate::config::AppConfig;
 use crate::control::ControlServer;
 use crate::file_dialog::{FileDialogAction, FileDialogMode};
@@ -82,6 +83,7 @@ pub struct RustSplitApp {
     server: Option<ServerHandle>,
     server_error: Option<String>,
     control: Option<ControlServer>,
+    auto_splitter: AutoSplitterUi,
     niri: Option<NiriIntegration>,
     pending_actions: Vec<Action>,
     last_window_size: Option<egui::Vec2>,
@@ -140,6 +142,7 @@ impl RustSplitApp {
             server: None,
             server_error: None,
             control,
+            auto_splitter: AutoSplitterUi::new(&cc.egui_ctx),
             niri,
             pending_actions: Vec::new(),
             last_window_size: None,
@@ -866,6 +869,22 @@ impl RustSplitApp {
         }
     }
 
+    /// Applies commands from the auto splitter thread (see `auto_splitter.rs`).
+    fn poll_auto_splitter(&mut self) {
+        let outcome = self
+            .auto_splitter
+            .update(&mut self.timer, &mut self.config.auto_splitter);
+        if outcome.autosave {
+            self.autosave_after_change();
+        }
+        if outcome.config_changed {
+            self.save_config();
+        }
+        if let Some(status) = outcome.status {
+            self.set_status(status);
+        }
+    }
+
     fn apply_control_command(&mut self, ctx: &Context, command: &str) -> Option<String> {
         let command = command.trim();
         let action = match command.to_ascii_lowercase().as_str() {
@@ -1275,6 +1294,7 @@ impl RustSplitApp {
             actions.push(Action::ToggleAlwaysOnTop);
         }
         ui.separator();
+        self.auto_splitter.menu(ui, &self.config.auto_splitter);
         if ui.button("Settings…            F1").clicked() {
             actions.push(Action::Settings);
             ui.close();
@@ -1392,6 +1412,7 @@ impl RustSplitApp {
             || self.file_dialog.is_open()
             || self.settings_open
             || self.about_open
+            || self.auto_splitter.window_open()
     }
 
     fn ensure_dialog_space(&mut self, ctx: &Context) {
@@ -1553,13 +1574,15 @@ impl eframe::App for RustSplitApp {
         self.poll_global_hotkeys();
         self.poll_server(&ctx);
         self.poll_control(&ctx);
+        self.poll_auto_splitter();
         self.handle_dropped_files(&ctx);
 
         let modal_open = self.run_editor.open
             || self.layout_editor.open
             || self.file_dialog.is_open()
             || self.settings_open
-            || self.about_open;
+            || self.about_open
+            || self.auto_splitter.window_open();
         if !modal_open {
             self.handle_local_shortcuts(&ctx);
         }
@@ -1581,6 +1604,9 @@ impl eframe::App for RustSplitApp {
         self.show_settings(&ctx);
         self.show_about(&ctx);
         self.show_file_dialog(&ctx);
+        self.auto_splitter.show(&ctx, &self.config.auto_splitter);
+        // After every other timer mutation of this frame.
+        self.auto_splitter.publish(&self.timer);
         self.update_window_metadata(&ctx);
         self.store_window_geometry();
 

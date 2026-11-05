@@ -42,7 +42,15 @@
 
             src = ./.;
 
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # Git dependencies need a fixed hash. Update it together with
+              # the `livesplit-auto-splitting` rev in
+              # crates/rustsplit-auto-splitting/Cargo.toml.
+              outputHashes = {
+                "livesplit-auto-splitting-0.1.0" = "sha256-wZggklyWMBWOM7JVrSIMh296Bi6eTaTkKSuAfifaZKY=";
+              };
+            };
 
             nativeBuildInputs = with pkgs; [
               addDriverRunpath

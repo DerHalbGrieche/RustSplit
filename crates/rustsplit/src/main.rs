@@ -1,6 +1,7 @@
 //! RustSplit: a native Rust rewrite of LiveSplit.
 
 mod app;
+mod auto_splitter;
 mod config;
 mod control;
 mod file_dialog;

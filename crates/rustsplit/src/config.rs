@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::auto_splitter::AutoSplitterConfig;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -16,6 +18,7 @@ pub struct AppConfig {
     pub niri: NiriConfig,
     pub speedrun_com: SpeedrunComConfig,
     pub sounds: SoundConfig,
+    pub auto_splitter: AutoSplitterConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -15,7 +15,10 @@ name = "rustsplit"
 path = "src/main.rs"
 
 [features]
-default = ["native-dialogs", "sounds", "speedrun-com"]
+default = ["auto-splitting", "native-dialogs", "sounds", "speedrun-com"]
+# Run WebAssembly auto splitters (LiveSplit One / `asr` format) on
+# livesplit-core's wasmtime-based runtime.
+auto-splitting = ["dep:rustsplit-auto-splitting"]
 # Use the platform's file dialogs (XDG desktop portal on Linux), falling back
 # to the built-in egui browser when they are unavailable.
 native-dialogs = ["dep:rfd", "dep:pollster"]
@@ -29,6 +32,7 @@ sounds = ["dep:rodio"]
 rustsplit-core.workspace = true
 rustsplit-ui.workspace = true
 rustsplit-server.workspace = true
+rustsplit-auto-splitting = { workspace = true, optional = true }
 
 chrono.workspace = true
 clap.workspace = true

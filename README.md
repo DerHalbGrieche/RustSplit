@@ -8,9 +8,10 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
 
 > **Status:** this is an independent rewrite, not a drop-in replacement for
 > every LiveSplit plugin. Core timing, `.lss` split files, `.lsl` layouts,
-> layout components and the LiveSplit Server protocol are implemented. Racing,
-> video playback, auto-splitting runtimes and Speedrun.com integration beyond
-> world records are not yet part of this rewrite.
+> layout components, the LiveSplit Server protocol and WebAssembly auto
+> splitters are implemented. Classic `.asl` auto splitter scripts, racing,
+> video playback and Speedrun.com integration beyond world records are not yet
+> part of this rewrite.
 
 <p align="center">
   <img src="docs/screenshots/overlay.png" width="210" alt="RustSplit overlay"/>
@@ -23,7 +24,11 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
   offsets, undo/skip, reset, and reset-and-set-PB.
 - **LiveSplit `.lss` compatibility**: reads and writes LiveSplit 1.7 split
   files, including attempts, segment history, custom comparisons, metadata,
-  icons and auto-splitter settings (preserved but not executed).
+  icons and auto-splitter settings.
+- **WebAssembly auto splitters**: runs the `.wasm` auto splitters made for
+  LiveSplit One and LiveSplit's Auto Splitting Runtime (the `asr` crate API)
+  on livesplit-core's runtime, with their settings editable in RustSplit and
+  stored in the `.lss` file. See [Auto splitters](#auto-splitters).
 - **LiveSplit `.lsl` layouts**: reads existing layouts and writes layouts that
   use the same component paths and settings structure. The stock LiveSplit
   layout is bundled.
@@ -58,14 +63,25 @@ with an [egui](https://github.com/emilk/egui) desktop UI.
 
 ## Building
 
-Requires a Rust toolchain (1.95+; developed with 1.97) and the usual Linux
-windowing libraries for `winit`/`glutin`. Sound effects need the ALSA
-development headers (`alsa-lib`, `libasound2-dev` on Debian/Ubuntu); build
-with `--no-default-features` to leave them out.
+Requires a Rust toolchain (1.97+) and the usual Linux windowing libraries for
+`winit`/`glutin`. Sound effects need the ALSA development headers
+(`alsa-lib`, `libasound2-dev` on Debian/Ubuntu); build with
+`--no-default-features` to leave them out.
 
 ```bash
 cargo build --release
 ./target/release/rustsplit
+```
+
+Auto splitting is the default `auto-splitting` cargo feature. It pulls in
+wasmtime and Cranelift, which makes a clean release build about four times
+slower (roughly 2 to 8.5 minutes on a 16-core machine) and adds about 16 MB to
+the binary (13 MB when stripped). Build without it, keeping the other default
+features, with:
+
+```bash
+cargo build --release -p rustsplit --no-default-features \
+  --features native-dialogs,sounds,speedrun-com
 ```
 
 On NixOS this repository works with the standard Rust toolchain:
@@ -206,6 +222,40 @@ Files are decoded in the background and the audio device is opened the first
 time a sound plays. If there is no audio device, RustSplit logs a warning and
 carries on silently.
 
+### Auto splitters
+
+RustSplit runs WebAssembly auto splitters, the format used by LiveSplit One
+and by LiveSplit's "Auto Splitting Runtime" component. Most new auto splitters
+are written in Rust with the [`asr`](https://github.com/LiveSplit/asr) crate
+and published as `.wasm` files. Classic LiveSplit `.asl` scripts are not
+supported.
+
+Right-click the timer and open **Auto Splitter**:
+
+- **Load Auto Splitter…** picks a `.wasm` file for the current split file.
+- **Enable Auto Splitter** turns auto splitting on or off for all runs.
+- **Auto Splitter Settings…** shows the auto splitter's status and its
+  settings (checkboxes, choices, text fields, file selections), plus its log.
+- **Remove Auto Splitter** stops it and forgets it for this split file.
+
+The auto splitter can start, split, skip, undo and reset the timer, pause and
+set game time, and set custom variables. Finishing or resetting a run from the
+auto splitter autosaves like a manual split or reset does. Each split file
+remembers its auto splitter: the path is stored per split file in
+`settings.toml` (`[auto_splitter.runs]`) and, like LiveSplit One does, together
+with the auto splitter's settings in the `.lss` file's `<AutoSplitterSettings>`.
+Opening a split file therefore loads its auto splitter automatically.
+
+Auto splitters read the game's memory, so RustSplit needs permission to read
+other processes. On Linux distributions that set `kernel.yama.ptrace_scope`
+to 1, only child processes can be read; set it to 0 or give the binary
+`CAP_SYS_PTRACE` (`sudo setcap cap_sys_ptrace=eip ./rustsplit`). Auto
+splitters run inside wasmtime: besides reading the memory of processes they
+attach to, they can only read files (the runtime exposes the file system
+read-only) and cannot write files or use the network. Only load auto splitters
+you trust. An `update` call that hangs for more than five seconds is
+interrupted.
+
 ### Configuration
 
 Settings live in the platform configuration directory, normally:
@@ -279,6 +329,8 @@ crates/
   rustsplit-core/    Timer, run model, time formatting, comparisons, .lss
   rustsplit-ui/      Layout model, .lsl, egui components and renderer
   rustsplit-server/  TCP protocol and command handling
+  rustsplit-auto-splitting/
+                     WebAssembly auto splitter runtime glue (optional)
   rustsplit/         Desktop application, editors, hotkeys, configuration
 ```
 
@@ -291,8 +343,14 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a tour of the data flow.
 - `.lsl` layouts are read with legacy font blobs and component settings.
   RustSplit stores fonts it changes in a readable `Name|Size|Bold|Italic`
   form; unchanged LiveSplit font blobs are preserved byte-for-byte.
-- Auto-splitter settings from `.lss` files are preserved but auto-splitting is
-  not executed.
+- WebAssembly auto splitter settings are read from and written to the `.lss`
+  `<AutoSplitterSettings>` element in livesplit-core's format, so split files
+  can be shared with LiveSplit One. Settings of classic LiveSplit `.asl`
+  scripts are preserved but those scripts are not executed. Loading a
+  WebAssembly auto splitter for such a split file replaces them.
+- Custom variables set by an auto splitter are stored like any other run
+  custom variable, so they are saved with the split file (LiveSplit keeps them
+  only in memory).
 - The World Record component shows the speedrun.com record when
   [enabled](#speedruncom-world-records); otherwise it shows a "World Record" or
   "WR" comparison stored in the splits.

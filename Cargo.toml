@@ -4,13 +4,14 @@ members = [
     "crates/rustsplit-core",
     "crates/rustsplit-ui",
     "crates/rustsplit-server",
+    "crates/rustsplit-auto-splitting",
     "crates/rustsplit",
 ]
 
 [workspace.package]
 version = "1.0.1"
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.97"
 license = "MIT"
 authors = ["RustSplit contributors"]
 
@@ -18,6 +19,7 @@ authors = ["RustSplit contributors"]
 rustsplit-core = { path = "crates/rustsplit-core" }
 rustsplit-ui = { path = "crates/rustsplit-ui" }
 rustsplit-server = { path = "crates/rustsplit-server" }
+rustsplit-auto-splitting = { path = "crates/rustsplit-auto-splitting" }
 
 anyhow = "1.0.100"
 base64 = "0.22.1"

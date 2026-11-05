@@ -1,0 +1,30 @@
+[package]
+name = "rustsplit-auto-splitting"
+description = "Runs WebAssembly auto splitters (LiveSplit One / asr) against RustSplit's timer"
+version.workspace = true
+edition.workspace = true
+# `livesplit-auto-splitting` and wasmtime 50 set the workspace MSRV (1.97).
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rustsplit-core.workspace = true
+
+arc-swap = "1.7.1"
+log.workspace = true
+xmltree.workspace = true
+
+# Not published on crates.io in a usable version (the crates.io 0.1.0 release
+# is from 2022 and predates the current `asr` host API), so it is pinned to an
+# upstream livesplit-core revision. Default features only add symbol
+# demangling to trap backtraces and are left off to keep the binary smaller.
+[dependencies.livesplit-auto-splitting]
+git = "https://github.com/LiveSplit/livesplit-core"
+rev = "f348cf69180ba910df9450c4d64079a7695572db"
+default-features = false
+
+[dev-dependencies]
+wat = "1.240.0"

@@ -1,12 +1,13 @@
 # Architecture
 
-RustSplit is split into four crates with a one-way dependency graph:
+RustSplit is split into five crates with a one-way dependency graph:
 
 ```
 rustsplit (binary)
- ├── rustsplit-ui ──┐
- ├── rustsplit-server ─┤
- └── rustsplit-core ◄─┘
+ ├── rustsplit-ui ─────────────┐
+ ├── rustsplit-server ─────────┤
+ ├── rustsplit-auto-splitting ─┤   (optional, `auto-splitting` feature)
+ └── rustsplit-core ◄──────────┘
 ```
 
 ## rustsplit-core
@@ -68,6 +69,47 @@ when a request is queued; the app drains the channel, mutates the timer on the
 UI thread, and sends the optional response back. This keeps all timer mutation
 on one thread. Concurrent clients and line lengths are capped.
 
+## rustsplit-auto-splitting
+
+Runs WebAssembly auto splitters (the LiveSplit One / `asr` format) against
+the timer. The runtime itself is livesplit-core's `livesplit-auto-splitting`
+crate (wasmtime), pinned to an upstream git revision because the crates.io
+release predates the current host API.
+
+```
+auto splitter thread                       UI thread
+────────────────────                       ─────────
+update() at the tick rate ──commands──►    AutoSplitterHost::poll
+  ChannelTimer (asr Timer trait)  mpsc      apply_command(&mut Timer)
+      ▲                                     │
+      └──── TimerSnapshot ◄── ArcSwap ◄─────┘ AutoSplitterHost::publish
+```
+
+- `runner.rs` — the auto splitter thread: reads and compiles the module (one
+  wasmtime engine per load), then calls `update` at the tick rate the auto
+  splitter requests (120 Hz by default). A watchdog thread interrupts an
+  `update` call that runs longer than five seconds. A trap unloads the auto
+  splitter and reports the error.
+- `adapter.rs` — `ChannelTimer`, the runtime's `Timer` trait implementation.
+  Mutations become `AutoSplitterCommand`s on a channel, like the server's
+  `ServerRequest`s. Commands that change the run's state call a waker
+  (`egui::Context::request_repaint`); game time and variables, which are
+  usually set every tick, wait for the next regular repaint. Queries read a
+  `TimerSnapshot` published through `ArcSwap`, so the thread never waits on
+  the UI. Until the UI has applied its commands (tracked by sequence number),
+  the adapter answers from a prediction of their effect, so an auto splitter
+  does not start or split twice while the UI catches up. Redundant commands
+  are not sent at all.
+- `command.rs` — `apply_command`, run on the UI thread. Game time commands
+  are ignored without an attempt in progress, like livesplit-core does.
+- `snapshot.rs` — `TimerSnapshot` and the prediction, which mirrors
+  `Timer`'s state machine (a test checks both agree).
+- `host.rs` — `AutoSplitterHost`, owned by the UI: load/unload, status, the
+  settings map and widgets, the log, and writing the settings into the run.
+  Commands from a previous auto splitter are dropped by generation number.
+- `stored.rs` — `<AutoSplitterSettings>` in livesplit-core's format
+  (`Version`, `ScriptPath`, `CustomSettings` with typed `Setting`s).
+
 ## rustsplit (binary)
 
 The desktop application and integration layer:
@@ -75,6 +117,11 @@ The desktop application and integration layer:
 - `main.rs` — CLI, startup, window options.
 - `app.rs` — eframe app, context menu, shortcuts, global hotkeys, server
   polling, Niri geometry tracking, dialogs and persistence.
+- `auto_splitter.rs` — auto splitter menu, settings window and per-run
+  selection (`settings.toml` `[auto_splitter]`, then the `.lss` `ScriptPath`).
+  It notices when another split file is opened and loads or unloads the
+  matching auto splitter. Without the feature it is a stub with a disabled
+  menu entry.
 - `config.rs` — `settings.toml` model and recent-file handling.
 - `control.rs` — local Unix control socket used by compositor key bindings
   (`rustsplit --command ...`).
@@ -99,7 +146,8 @@ The desktop application and integration layer:
 
 ## Data flow
 
-1. Timer state changes (keys, server, menu, editor) go through `Timer`.
+1. Timer state changes (keys, server, auto splitter, menu, editor) go through
+   `Timer`, always on the UI thread.
 2. The renderer reads a snapshot: current phase/time, run segments, current
    comparison and timing method.
 3. Components compute display values with `rustsplit_core::analysis` and the
@@ -127,3 +175,7 @@ The desktop application and integration layer:
   adjust the expected strings in the test.
 - Renderer unit tests cover layout scaling, clipping, the background image
   blur and texture cache, and extracting LiveSplit's embedded .NET bitmaps.
+- Auto splitting: unit tests drive the timer adapter, command application
+  and settings storage without WebAssembly. `tests/wasm.rs` assembles tiny
+  auto splitters from WAT and runs them on the real runtime thread (start,
+  split, settings, variables, traps, the watchdog).
