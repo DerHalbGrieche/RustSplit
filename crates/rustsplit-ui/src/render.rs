@@ -13,6 +13,7 @@ use crate::canvas::paint_background;
 use crate::components::ComponentContext;
 use crate::icon::IconCache;
 use crate::layout::{BackgroundStyle, Layout, LayoutMode, LayoutSettings};
+use crate::layout_xml::EMBEDDED_IMAGE_PREFIX;
 use crate::world_record::WorldRecord;
 
 pub struct Renderer {
@@ -156,8 +157,9 @@ impl Renderer {
         // clip rect here would shrink the clip to `window * scale`.
         root.set_clip_rect(virtual_rect);
 
+        let gradient = layout.settings.background_type.gradient();
         let background_texture = match &layout.settings.background_image {
-            Some(path) if !transparent => {
+            Some(path) if gradient.is_none() => {
                 self.ensure_background(ui.ctx(), path, layout.settings.image_blur)
             }
             _ => None,
@@ -168,30 +170,52 @@ impl Renderer {
         let world_record = self.world_record.as_ref();
 
         root.with_visual_transform(transform, |ui| {
-            // Layout background image.
-            if let Some((texture, image_size)) = background_texture {
-                let image_scale =
-                    (virtual_rect.width() / image_size.x).max(virtual_rect.height() / image_size.y);
-                let size = image_size * image_scale;
-                let rect = Rect::from_center_size(virtual_rect.center(), size);
-                ui.painter().image(
-                    texture,
-                    rect,
-                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::from_white_alpha((255.0 * image_opacity) as u8),
-                );
-            }
-
-            // Layout background. Use the shared background painter so a
-            // "Plain" background is a solid color; interpolating to the
-            // second color would make opaque LiveSplit layouts fade out.
-            if !transparent {
-                let background = BackgroundStyle {
-                    color: layout.settings.background_color,
-                    color2: layout.settings.background_color2,
-                    gradient: layout.settings.background_gradient,
-                };
-                paint_background(ui.painter(), virtual_rect, &background);
+            match gradient {
+                // Layout background. Use the shared background painter so a
+                // "Plain" background is a solid color; interpolating to the
+                // second color would make opaque LiveSplit layouts fade out.
+                Some(gradient) if !transparent => {
+                    let background = BackgroundStyle {
+                        color: layout.settings.background_color,
+                        color2: layout.settings.background_color2,
+                        gradient,
+                    };
+                    paint_background(ui.painter(), virtual_rect, &background);
+                }
+                Some(_) => {}
+                // An image background draws only the image, never the colors.
+                //
+                // `ImageOpacity` is brightness, not transparency: LiveSplit
+                // bakes it into the image's alpha and draws that over its
+                // black window, and livesplit-core maps it to brightness for
+                // that reason. Painting black first and the image at that
+                // alpha on top gives the same result, including black behind
+                // transparent pixels of the image.
+                //
+                // Transparent mode has no black window, so there the image is
+                // alpha-blended over whatever is behind the overlay and the
+                // setting is a real opacity. That is the point of the mode,
+                // and the only way to get a see-through image.
+                None => {
+                    if !transparent {
+                        ui.painter()
+                            .rect_filled(virtual_rect, 0.0, egui::Color32::BLACK);
+                    }
+                    if let Some((texture, image_size)) = background_texture {
+                        // Cover the layout and crop the overflow evenly, like
+                        // LiveSplit.
+                        let image_scale = (virtual_rect.width() / image_size.x)
+                            .max(virtual_rect.height() / image_size.y);
+                        let size = image_size * image_scale;
+                        let rect = Rect::from_center_size(virtual_rect.center(), size);
+                        ui.painter().image(
+                            texture,
+                            rect,
+                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::from_white_alpha((255.0 * image_opacity).round() as u8),
+                        );
+                    }
+                }
             }
 
             last_rects.clear();
@@ -308,7 +332,7 @@ fn effective_blur(blur: f32) -> f32 {
 
 fn decode_background(path: &Path) -> Option<RgbaImage> {
     let path_text = path.to_string_lossy();
-    let bytes = if let Some(encoded) = path_text.strip_prefix("livesplit-embedded-image:") {
+    let bytes = if let Some(encoded) = path_text.strip_prefix(EMBEDDED_IMAGE_PREFIX) {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
             .decode(encoded.trim())
@@ -316,8 +340,36 @@ fn decode_background(path: &Path) -> Option<RgbaImage> {
     } else {
         std::fs::read(path).ok()?
     };
-    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let image = image::load_from_memory(&bytes)
+        .or_else(|error| {
+            dotnet_bitmap_data(&bytes)
+                .ok_or(error)
+                .and_then(image::load_from_memory)
+        })
+        .ok()?
+        .to_rgba8();
     (image.width() > 0 && image.height() > 0).then_some(image)
+}
+
+/// The encoded image inside a .NET `BinaryFormatter` serialization of a
+/// `System.Drawing.Bitmap`, which is what LiveSplit embeds in `.lsl` files.
+/// The bitmap's only member, `Data`, is a byte array holding the image file
+/// (usually PNG). Its record is the last one before the message end:
+/// `0x0F` (ArraySinglePrimitive), object id, `u32` length, `0x02` (Byte),
+/// the bytes, then `0x0B` (MessageEnd). livesplit-core reads the same bytes
+/// at a fixed offset; finding the record also copes with other assembly
+/// names in the header.
+fn dotnet_bitmap_data(blob: &[u8]) -> Option<&[u8]> {
+    const RECORD_HEADER: usize = 10;
+    let (&0x0B, body) = blob.split_last()? else {
+        return None;
+    };
+    (0..body.len().checked_sub(RECORD_HEADER)?).find_map(|start| {
+        let header = &body[start..start + RECORD_HEADER];
+        let length = u32::from_le_bytes(header[5..9].try_into().ok()?) as usize;
+        let data = &body[start + RECORD_HEADER..];
+        (header[0] == 0x0F && header[9] == 0x02 && data.len() == length).then_some(data)
+    })
 }
 
 /// Build the background texture pixels with the blur applied. This runs once
@@ -395,7 +447,7 @@ mod tests {
     use egui::{pos2, vec2, Context, RawInput, Rect};
     use rustsplit_core::{Run, Timer};
 
-    use crate::layout::GradientType;
+    use crate::layout::BackgroundType;
 
     fn render(
         layout: &Layout,
@@ -460,7 +512,7 @@ mod tests {
         let mut layout = Layout::default();
         layout.settings.background_color = egui::Color32::from_rgb(15, 15, 15);
         layout.settings.background_color2 = egui::Color32::TRANSPARENT;
-        layout.settings.background_gradient = GradientType::Plain;
+        layout.settings.background_type = BackgroundType::SolidColor;
         layout.settings.transparent_background = false;
         let timer = timer();
         let (_, shapes) = render(&layout, &timer, vec2(300.0, 500.0));
@@ -615,8 +667,9 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(png);
 
         let mut layout = Layout::default();
+        layout.settings.background_type = BackgroundType::Image;
         layout.settings.background_image =
-            Some(PathBuf::from(format!("livesplit-embedded-image:{encoded}")));
+            Some(PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}")));
         layout.settings.transparent_background = false;
         let timer = timer();
         let ctx = Context::default();
@@ -646,5 +699,59 @@ mod tests {
         layout.settings.image_blur = 0.5;
         assert_eq!(uploads(&layout), 1, "a new blur must rebuild the texture");
         assert_eq!(uploads(&layout), 0);
+    }
+
+    /// What .NET's `BinaryFormatter` writes for a `System.Drawing.Bitmap`
+    /// holding `data`, as LiveSplit stores it in `<BackgroundImage>`.
+    fn dotnet_bitmap(data: &[u8]) -> Vec<u8> {
+        fn string(out: &mut Vec<u8>, text: &str) {
+            out.push(text.len() as u8);
+            out.extend_from_slice(text.as_bytes());
+        }
+        // SerializationHeader: root id 1, header id -1, version 1.0.
+        let mut out = vec![
+            0x00, 1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        // BinaryLibrary 2.
+        out.extend_from_slice(&[0x0C, 2, 0, 0, 0]);
+        string(
+            &mut out,
+            "System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+        );
+        // ClassWithMembersAndTypes 1: Bitmap { Data: byte[] } from library 2.
+        out.extend_from_slice(&[0x05, 1, 0, 0, 0]);
+        string(&mut out, "System.Drawing.Bitmap");
+        out.extend_from_slice(&[1, 0, 0, 0]);
+        string(&mut out, "Data");
+        out.extend_from_slice(&[0x07, 0x02, 2, 0, 0, 0]);
+        // MemberReference to object 3, then object 3 itself.
+        out.extend_from_slice(&[0x09, 3, 0, 0, 0]);
+        out.extend_from_slice(&[0x0F, 3, 0, 0, 0]);
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.push(0x02);
+        out.extend_from_slice(data);
+        // MessageEnd.
+        out.push(0x0B);
+        out
+    }
+
+    #[test]
+    fn livesplit_bitmap_blobs_are_decoded() {
+        let mut png = Vec::new();
+        line_image(16)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let blob = dotnet_bitmap(&png);
+        // livesplit-core reads the image at this fixed offset.
+        assert_eq!(&blob[161..blob.len() - 1], png.as_slice());
+        assert_eq!(dotnet_bitmap_data(&blob), Some(png.as_slice()));
+        assert_eq!(dotnet_bitmap_data(&png), None);
+        assert_eq!(dotnet_bitmap_data(&[0x0B]), None);
+
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&blob);
+        let path = PathBuf::from(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}"));
+        let image = decode_background(&path).expect("the embedded bitmap must decode");
+        assert_eq!(image.dimensions(), (16, 16));
     }
 }

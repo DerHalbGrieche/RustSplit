@@ -17,7 +17,7 @@ use crate::control::ControlServer;
 use crate::file_dialog::{FileDialogAction, FileDialogMode};
 use crate::file_dialogs::FileDialogs;
 use crate::hotkeys::{GlobalHotkeys, HotkeyAction};
-use crate::layout_editor::{LayoutEditor, LayoutEditorEvent};
+use crate::layout_editor::{LayoutEditor, LayoutEditorEvent, BACKGROUND_IMAGE_EXTENSIONS};
 use crate::niri::{self, DesiredWindow, NiriIntegration};
 use crate::run_editor::{RunEditor, RunEditorEvent};
 use crate::sounds::{self, SoundEvent, SoundPlayer};
@@ -61,6 +61,7 @@ enum FilePurpose {
     OpenLayout,
     SaveLayout,
     Sound(SoundEvent),
+    BackgroundImage,
 }
 
 pub struct RustSplitApp {
@@ -522,6 +523,7 @@ impl RustSplitApp {
                     *event.path_mut(&mut draft.sounds) = Some(path);
                 }
             }
+            Some(FilePurpose::BackgroundImage) => self.layout_editor.set_background_image(path),
             None => {}
         }
     }
@@ -645,6 +647,16 @@ impl RustSplitApp {
                 self.layout =
                     Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
                 self.apply_layout_change(ctx);
+            }
+            LayoutEditorEvent::BrowseBackgroundImage => {
+                self.file_dialog.open(
+                    FileDialogMode::Open,
+                    "Choose Background Image",
+                    self.layout_editor.background_image_start().as_deref(),
+                    "",
+                    BACKGROUND_IMAGE_EXTENSIONS,
+                );
+                self.file_purpose = Some(FilePurpose::BackgroundImage);
             }
         }
     }

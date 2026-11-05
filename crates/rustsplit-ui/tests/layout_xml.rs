@@ -1,7 +1,7 @@
 //! Integration tests for LiveSplit `.lsl` layout parsing and saving.
 
 use rustsplit_ui::components::Component;
-use rustsplit_ui::layout::{FontSpec, GradientType, Layout, LayoutMode, LayoutSettings};
+use rustsplit_ui::layout::{BackgroundType, FontSpec, Layout, LayoutMode, LayoutSettings};
 use rustsplit_ui::layout_xml::{
     font_to_xml, layout_to_string, parse_dotnet_font, parse_layout, LayoutXmlError,
     EMBEDDED_IMAGE_PREFIX,
@@ -81,7 +81,7 @@ fn assert_settings_fields_eq(actual: &LayoutSettings, expected: &LayoutSettings)
     );
     assert_eq!(actual.shadows_color, expected.shadows_color, "ShadowsColor");
     assert_eq!(
-        actual.background_gradient, expected.background_gradient,
+        actual.background_type, expected.background_type,
         "BackgroundType/BackgroundGradient"
     );
     assert_eq!(
@@ -388,7 +388,10 @@ fn legacy_layout_with_main_font_and_split_names_font() {
     assert_eq!(layout.settings.text_font.name, "Segoe UI");
     assert!(!layout.settings.text_font.bold);
     assert_eq!(layout.settings.timer_font.name, "Century Gothic");
-    assert_eq!(layout.settings.background_gradient, GradientType::Vertical);
+    assert_eq!(
+        layout.settings.background_type,
+        BackgroundType::VerticalGradient
+    );
     assert_eq!(layout.components.len(), 1);
     assert!(matches!(
         &layout.components[0].component,
@@ -413,7 +416,7 @@ fn pre_13_black_background_becomes_transparent() {
         layout.settings.background_color2,
         egui::Color32::TRANSPARENT
     );
-    assert_eq!(layout.settings.background_gradient, GradientType::Plain);
+    assert_eq!(layout.settings.background_type, BackgroundType::SolidColor);
 
     let xml = r#"<Layout version="1.2">
   <Settings>
@@ -435,9 +438,9 @@ fn pre_13_black_background_becomes_transparent() {
 fn parses_layout_versions_1_3_through_1_7() {
     let legacy_values = ["Plain", "Vertical", "Horizontal"];
     let expected_legacy = [
-        GradientType::Plain,
-        GradientType::Vertical,
-        GradientType::Horizontal,
+        BackgroundType::SolidColor,
+        BackgroundType::VerticalGradient,
+        BackgroundType::HorizontalGradient,
     ];
     for version in ["1.3", "1.4", "1.5", "1.6"] {
         for (value, expected) in legacy_values.iter().zip(expected_legacy) {
@@ -446,17 +449,17 @@ fn parses_layout_versions_1_3_through_1_7() {
             );
             let layout = parse_layout(xml.as_bytes()).expect("legacy gradient must parse");
             assert_eq!(
-                layout.settings.background_gradient, expected,
+                layout.settings.background_type, expected,
                 "version {version} value {value}"
             );
         }
     }
 
     let modern_values = [
-        ("SolidColor", GradientType::Plain),
-        ("VerticalGradient", GradientType::Vertical),
-        ("HorizontalGradient", GradientType::Horizontal),
-        ("Image", GradientType::Plain),
+        ("SolidColor", BackgroundType::SolidColor),
+        ("VerticalGradient", BackgroundType::VerticalGradient),
+        ("HorizontalGradient", BackgroundType::HorizontalGradient),
+        ("Image", BackgroundType::Image),
     ];
     for version in ["1.6.1", "1.7"] {
         for (value, expected) in modern_values {
@@ -465,7 +468,7 @@ fn parses_layout_versions_1_3_through_1_7() {
             );
             let layout = parse_layout(xml.as_bytes()).expect("modern gradient must parse");
             assert_eq!(
-                layout.settings.background_gradient, expected,
+                layout.settings.background_type, expected,
                 "version {version} value {value}"
             );
         }
@@ -475,8 +478,8 @@ fn parses_layout_versions_1_3_through_1_7() {
     let xml = r#"<Layout version="1.7"><Settings><BackgroundGradient>Horizontal</BackgroundGradient></Settings></Layout>"#;
     let layout = parse_layout(xml.as_bytes()).unwrap();
     assert_eq!(
-        layout.settings.background_gradient,
-        GradientType::Horizontal
+        layout.settings.background_type,
+        BackgroundType::HorizontalGradient
     );
 }
 
@@ -520,7 +523,7 @@ fn custom_layout_settings_roundtrip() {
     <ShowBestSegments>False</ShowBestSegments>
     <AntiAliasing>False</AntiAliasing>
     <DropShadows>False</DropShadows>
-    <BackgroundType>HorizontalGradient</BackgroundType>
+    <BackgroundType>Image</BackgroundType>
     <BackgroundImagePath>/tmp/background.png</BackgroundImagePath>
     <ImageOpacity>0.25</ImageOpacity>
     <ImageBlur>3.25</ImageBlur>
@@ -555,7 +558,7 @@ fn custom_layout_settings_roundtrip() {
         egui::Color32::from_rgb(0x44, 0x55, 0x66)
     );
     assert_eq!(settings.background_color2, egui::Color32::TRANSPARENT);
-    assert_eq!(settings.background_gradient, GradientType::Horizontal);
+    assert_eq!(settings.background_type, BackgroundType::Image);
     assert_eq!(
         settings.background_image.as_deref(),
         Some(std::path::Path::new("/tmp/background.png"))
@@ -743,7 +746,7 @@ fn background_image_blob_is_preserved() {
         reparsed.settings.background_image,
         layout.settings.background_image
     );
-    assert_eq!(reparsed.settings.background_gradient, GradientType::Plain);
+    assert_eq!(reparsed.settings.background_type, BackgroundType::Image);
 }
 
 #[test]
@@ -764,6 +767,173 @@ fn background_image_path_extension_roundtrips() {
         reparsed.settings.background_image.as_deref(),
         Some(std::path::Path::new("relative/background.png"))
     );
+}
+
+/// A LiveSplit 1.6.1+ settings block with every background setting.
+fn background_layout_xml(background_type: &str, image_blob: &str) -> String {
+    format!(
+        r#"<Layout version="1.6.1">
+  <Settings>
+    <BackgroundColor>FF0F0F0F</BackgroundColor>
+    <BackgroundColor2>FF2A2A2A</BackgroundColor2>
+    <BackgroundType>{background_type}</BackgroundType>
+    <BackgroundImage><![CDATA[{image_blob}]]></BackgroundImage>
+    <ImageOpacity>0.75</ImageOpacity>
+    <ImageBlur>0.5</ImageBlur>
+  </Settings>
+  <Components />
+</Layout>"#
+    )
+}
+
+#[test]
+fn every_background_type_roundtrips() {
+    let image_blob = "AAEAAAD/////AQAAAAAAAAA=";
+    for (name, expected) in [
+        ("SolidColor", BackgroundType::SolidColor),
+        ("VerticalGradient", BackgroundType::VerticalGradient),
+        ("HorizontalGradient", BackgroundType::HorizontalGradient),
+        ("Image", BackgroundType::Image),
+    ] {
+        let xml = background_layout_xml(name, image_blob);
+        let layout = parse_layout(xml.as_bytes()).expect("background layout must parse");
+        let settings = &layout.settings;
+        assert_eq!(settings.background_type, expected, "{name}");
+        // The colors and the image are kept whichever one is drawn.
+        assert_eq!(
+            settings.background_color,
+            egui::Color32::from_rgb(0x0F, 0x0F, 0x0F),
+            "{name}"
+        );
+        assert_eq!(
+            settings.background_color2,
+            egui::Color32::from_rgb(0x2A, 0x2A, 0x2A),
+            "{name}"
+        );
+        assert!(
+            settings
+                .background_image
+                .as_ref()
+                .is_some_and(|image| image.to_string_lossy().ends_with(image_blob)),
+            "{name}"
+        );
+        assert_eq!(settings.image_opacity, 0.75, "{name}");
+        assert_eq!(settings.image_blur, 0.5, "{name}");
+        assert!(!settings.transparent_background, "{name}");
+
+        let saved = layout_to_string(&layout).expect("layout must serialize");
+        assert!(
+            saved.contains(&format!("<BackgroundType>{name}</BackgroundType>")),
+            "{name}: {saved}"
+        );
+        assert!(saved.contains(image_blob), "{name}");
+        assert!(saved.contains("<BackgroundColor2>FF2A2A2A</BackgroundColor2>"));
+        assert!(!saved.contains("<BackgroundImagePath>"), "{name}");
+        let reparsed = parse_layout(saved.as_bytes()).expect("saved layout must parse");
+        assert_settings_fields_eq(&reparsed.settings, settings);
+    }
+
+    // An image background without an image has nothing to draw.
+    let layout = parse_layout(background_layout_xml("Image", "").as_bytes()).unwrap();
+    assert_eq!(layout.settings.background_type, BackgroundType::Image);
+    assert_eq!(layout.settings.background_image, None);
+    assert!(!layout.settings.has_background());
+    assert!(layout.settings.transparent_background);
+}
+
+#[test]
+fn image_paths_are_only_saved_for_image_backgrounds() {
+    let mut layout = default_layout();
+    layout.settings.background_type = BackgroundType::Image;
+    layout.settings.background_image = Some("/tmp/background.png".into());
+    let saved = layout_to_string(&layout).unwrap();
+    assert!(saved.contains("<BackgroundType>Image</BackgroundType>"));
+    assert!(saved.contains("<BackgroundImagePath>/tmp/background.png</BackgroundImagePath>"));
+    let reparsed = roundtrip(&layout);
+    assert_settings_fields_eq(&reparsed.settings, &layout.settings);
+
+    // Switching back to a color keeps the path in memory, but a saved path
+    // next to a color type would mean an older RustSplit layout.
+    layout.settings.background_type = BackgroundType::SolidColor;
+    let saved = layout_to_string(&layout).unwrap();
+    assert!(!saved.contains("<BackgroundImagePath>"));
+    let reparsed = parse_layout(saved.as_bytes()).unwrap();
+    assert_eq!(
+        reparsed.settings.background_type,
+        BackgroundType::SolidColor
+    );
+    assert_eq!(reparsed.settings.background_image, None);
+}
+
+#[test]
+fn older_rustsplit_image_paths_keep_their_look() {
+    // Older RustSplit wrote a color type next to the path and painted the
+    // colors over the image.
+    let layout_with = |background_type: &str, color: &str, color2: &str, transparent: &str| {
+        let xml = format!(
+            r#"<Layout version="1.6.1">
+  <Settings>
+    <BackgroundColor>{color}</BackgroundColor>
+    <BackgroundColor2>{color2}</BackgroundColor2>
+    <TransparentBackground>{transparent}</TransparentBackground>
+    <BackgroundType>{background_type}</BackgroundType>
+    <BackgroundImage />
+    <BackgroundImagePath>/tmp/background.png</BackgroundImagePath>
+  </Settings>
+  <Components />
+</Layout>"#
+        );
+        parse_layout(xml.as_bytes()).expect("older RustSplit layout must parse")
+    };
+    let path = Some(std::path::Path::new("/tmp/background.png"));
+
+    // The colors let the image through: it becomes an image background.
+    for (background_type, color, color2) in [
+        ("SolidColor", "00000000", "00000000"),
+        ("SolidColor", "800F0F0F", "00000000"),
+        ("VerticalGradient", "FF0F0F0F", "00000000"),
+    ] {
+        let layout = layout_with(background_type, color, color2, "False");
+        assert_eq!(
+            layout.settings.background_type,
+            BackgroundType::Image,
+            "{background_type} {color} {color2}"
+        );
+        assert_eq!(layout.settings.background_image.as_deref(), path);
+        assert!(!layout.settings.transparent_background);
+    }
+
+    // Opaque colors hid the image, and transparent mode hid everything.
+    for (background_type, color, color2, transparent, expected) in [
+        (
+            "SolidColor",
+            "FF0F0F0F",
+            "00000000",
+            "False",
+            BackgroundType::SolidColor,
+        ),
+        (
+            "HorizontalGradient",
+            "FF0F0F0F",
+            "FF2A2A2A",
+            "False",
+            BackgroundType::HorizontalGradient,
+        ),
+        (
+            "SolidColor",
+            "00000000",
+            "00000000",
+            "True",
+            BackgroundType::SolidColor,
+        ),
+    ] {
+        let layout = layout_with(background_type, color, color2, transparent);
+        assert_eq!(
+            layout.settings.background_type, expected,
+            "{background_type} {color} {color2} {transparent}"
+        );
+        assert_eq!(layout.settings.background_image.as_deref(), path);
+    }
 }
 
 #[test]

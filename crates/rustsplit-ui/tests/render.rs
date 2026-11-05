@@ -12,13 +12,14 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Shape, Vec2};
+use egui::{Color32, Rect, Shape, TextureId, Vec2};
 use egui_kittest::Harness;
 use rustsplit_core::{
     load_run_from_str, Run, TestClock, TimeSpan, Timer, TimerPhase, TimingMethod,
 };
 use rustsplit_ui::components::{default_component_for_path, Component, ADDABLE_COMPONENTS};
-use rustsplit_ui::layout::{Layout, LayoutComponent, LayoutMode};
+use rustsplit_ui::layout::{BackgroundType, Layout, LayoutComponent, LayoutMode};
+use rustsplit_ui::layout_xml::EMBEDDED_IMAGE_PREFIX;
 use rustsplit_ui::xml::XmlElement;
 use rustsplit_ui::{configure_fonts, Renderer};
 
@@ -48,6 +49,20 @@ impl Frame {
         self.shapes
             .iter()
             .any(|(_, shape)| matches!(shape, Shape::Rect(rect) if rect.fill == color))
+    }
+
+    /// Meshes that draw a texture other than egui's font atlas, with their
+    /// bounds and vertex tint.
+    fn images(&self) -> Vec<(Rect, Color32)> {
+        self.shapes
+            .iter()
+            .filter_map(|(_, shape)| match shape {
+                Shape::Mesh(mesh) if mesh.texture_id != TextureId::default() => {
+                    Some((mesh.calc_bounds(), mesh.vertices.first()?.color))
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -250,6 +265,73 @@ fn transparent_mode_draws_text_without_a_background() {
         frame.assert_contains(text);
     }
     assert!(frame.texts.len() >= opaque.texts.len());
+}
+
+/// The default layout with an opaque red background color and an embedded
+/// 32x16 PNG as the background image.
+fn image_background_layout(background_type: BackgroundType) -> Layout {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(32, 16, image::Rgba([40, 90, 200, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+
+    let mut layout = default_layout();
+    layout.settings.background_color = Color32::RED;
+    layout.settings.background_color2 = Color32::RED;
+    layout.settings.background_type = background_type;
+    layout.settings.background_image = Some(format!("{EMBEDDED_IMAGE_PREFIX}{encoded}").into());
+    layout.settings.image_opacity = 0.75;
+    layout.settings.transparent_background = false;
+    layout
+}
+
+#[test]
+fn image_background_draws_the_image_instead_of_the_color() {
+    let (timer, _) = demo_timer();
+    let size = Vec2::new(286.0, 519.0);
+    let layout = image_background_layout(BackgroundType::Image);
+    let frame = render(&layout, &timer, size);
+
+    assert!(!frame.has_rect_filled_with(Color32::RED));
+    let images = frame.images();
+    assert_eq!(images.len(), 1, "exactly one background image: {images:?}");
+    let (rect, tint) = images[0];
+    // The image covers the window and is cropped evenly, like LiveSplit.
+    assert!(rect.width() >= size.x - 0.5 && rect.height() >= size.y - 0.5);
+    assert!((rect.center().x - size.x / 2.0).abs() < 0.5);
+    assert!((rect.center().y - size.y / 2.0).abs() < 0.5);
+    // ImageOpacity darkens the image over black, as in LiveSplit.
+    assert!(frame.has_rect_filled_with(Color32::BLACK));
+    assert_eq!(tint, Color32::from_white_alpha(191));
+    frame.assert_contains("RustSplit Demo");
+
+    // In transparent mode the image is see-through instead of darkened.
+    let mut transparent = layout.clone();
+    transparent.settings.transparent_background = true;
+    let frame = render(&transparent, &timer, size);
+    assert!(!frame.has_rect_filled_with(Color32::RED));
+    assert!(!frame.has_rect_filled_with(Color32::BLACK));
+    assert_eq!(frame.images().len(), 1);
+
+    // A color background ignores the image, also as in LiveSplit.
+    for background_type in [
+        BackgroundType::SolidColor,
+        BackgroundType::VerticalGradient,
+        BackgroundType::HorizontalGradient,
+    ] {
+        let layout = image_background_layout(background_type);
+        let frame = render(&layout, &timer, size);
+        assert!(frame.images().is_empty(), "{background_type:?}");
+        assert!(!frame.has_rect_filled_with(Color32::BLACK));
+    }
+    let frame = render(
+        &image_background_layout(BackgroundType::SolidColor),
+        &timer,
+        size,
+    );
+    assert!(frame.has_rect_filled_with(Color32::RED));
 }
 
 #[test]

@@ -11,8 +11,8 @@ pub mod world_record;
 pub use components::{Component, ComponentContext};
 pub use icon::IconCache;
 pub use layout::{
-    color_to_hex, parse_color, BackgroundStyle, FontOverrides, FontSpec, GradientType, Layout,
-    LayoutComponent, LayoutMode, LayoutSettings,
+    color_to_hex, parse_color, BackgroundStyle, BackgroundType, FontOverrides, FontSpec,
+    GradientType, Layout, LayoutComponent, LayoutMode, LayoutSettings,
 };
 pub use layout_xml::{load_layout, parse_layout, save_layout};
 pub use render::Renderer;
