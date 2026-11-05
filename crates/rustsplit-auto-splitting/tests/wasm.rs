@@ -132,15 +132,7 @@ fn auto_splitter_starts_and_splits_the_timer() {
         wakes.load(Ordering::SeqCst) >= 4,
         "start and 3 splits wake the UI"
     );
-    assert_eq!(
-        timer
-            .run
-            .metadata
-            .custom_variables
-            .get("Phase")
-            .map(String::as_str),
-        Some("ticking")
-    );
+    assert_eq!(timer.custom_variable("Phase"), Some("ticking"));
 
     let widgets = host.settings_widgets().unwrap();
     assert_eq!(widgets.len(), 1);

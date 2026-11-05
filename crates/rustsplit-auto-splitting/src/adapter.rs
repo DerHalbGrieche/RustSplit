@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use livesplit_auto_splitting::{time, AutoSplitter, LogLevel, Timer, TimerState};
@@ -45,6 +46,9 @@ pub(crate) enum Message {
         generation: u64,
         seq: u64,
         command: AutoSplitterCommand,
+        /// When the auto splitter issued the command. The UI applies it at
+        /// this moment, however long it takes to get to it.
+        issued: Instant,
     },
     Log {
         generation: u64,
@@ -130,6 +134,7 @@ impl ChannelTimer {
             generation: self.generation,
             seq: self.sent_seq,
             command,
+            issued: Instant::now(),
         };
         if self.sender.send(message).is_ok() && urgent {
             (self.waker)();

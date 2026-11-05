@@ -237,6 +237,9 @@ impl CommandOutcome {
 /// client never has to wait for the full response timeout.
 pub struct ServerRequest {
     pub command: ServerCommand,
+    /// When the command was read from the client. Apply it at this moment
+    /// (`Timer::timestamp_of`), not when the UI thread gets to it.
+    pub received: Instant,
     respond: Option<SyncSender<Option<String>>>,
 }
 
@@ -584,6 +587,7 @@ fn dispatch_command(command: ServerCommand, shared: &ClientShared, writer: &mut 
     let (response_sender, response_receiver) = sync_channel(1);
     let request = ServerRequest {
         command,
+        received: Instant::now(),
         respond: Some(response_sender),
     };
 
@@ -1190,10 +1194,7 @@ pub fn handle_command(timer: &mut Timer, command: &ServerCommand) -> CommandOutc
         ),
         ServerCommand::GetCustomVariableValue(name) => {
             let value = timer
-                .run
-                .metadata
-                .custom_variables
-                .get(name)
+                .custom_variable(name)
                 .map(|value| value.replace("\r\n", " ").replace(['\r', '\n'], " "))
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "-".to_string());

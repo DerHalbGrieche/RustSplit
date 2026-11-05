@@ -182,15 +182,8 @@ fn game_time_and_variables() {
         timer.current_time().game_time,
         Some(TimeSpan::from_seconds(4))
     );
-    assert_eq!(
-        timer
-            .run
-            .metadata
-            .custom_variables
-            .get("Area")
-            .map(String::as_str),
-        Some("Forest")
-    );
+    assert_eq!(timer.custom_variable("Area"), Some("Forest"));
+    assert!(timer.run.metadata.custom_variables.is_empty());
 
     clock.advance(TimeSpan::from_seconds(10));
     assert_eq!(
@@ -211,6 +204,28 @@ fn game_time_and_variables() {
 }
 
 #[test]
+fn commands_are_applied_when_they_were_issued() {
+    let (mut host, _) = host();
+    let mut timer = Timer::with_system_clock(Run::with_segments("Game", "Any%", ["One", "Two"]));
+    let mut adapter = host.attach_test_timer(Path::new(PATH), &timer);
+    adapter.start();
+    host.poll(&mut timer);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let before = timer.current_time().real_time.unwrap();
+    adapter.split();
+    let after = timer.current_time().real_time.unwrap();
+    // The UI only gets to the split much later, e.g. while minimized.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    host.poll(&mut timer);
+    let split = timer.run.segments[0].split_time.real_time.unwrap();
+    let tolerance = TimeSpan::from_millis(1);
+    assert!(
+        before - tolerance <= split && split <= after + tolerance,
+        "the split was not recorded when it was issued: {split:?} not in {before:?}..{after:?}"
+    );
+}
+
+#[test]
 fn set_variable_does_not_mark_the_run_as_changed() {
     let (mut timer, _) = timer(1);
     timer.run.has_changed = false;
@@ -220,7 +235,9 @@ fn set_variable_does_not_mark_the_run_as_changed() {
     };
     assert!(!apply_command(&mut timer, &command).autosave);
     assert!(!timer.run.has_changed);
-    assert_eq!(timer.run.metadata.custom_variables["Deaths"], "3");
+    assert_eq!(timer.custom_variable("Deaths"), Some("3"));
+    // Auto splitter variables are not saved into the split file.
+    assert!(timer.run.metadata.custom_variables.is_empty());
 }
 
 #[test]

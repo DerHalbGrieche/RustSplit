@@ -20,9 +20,22 @@ use crate::file_dialog::{
 };
 
 /// A system dialog that comes back empty faster than this never really
-/// opened. rfd reports a missing portal (and a missing zenity fallback) the
-/// same way as a cancel, so a near-instant "cancel" is treated as a failure.
-const FAST_FAILURE: Duration = Duration::from_millis(350);
+/// opened. rfd's XDG portal backend reports a missing portal (and a missing
+/// zenity fallback) the same way as a cancel, so a near-instant "cancel" is
+/// treated as a failure there. rfd logs the actual error. The Windows and
+/// macOS dialogs report failures properly, so an empty answer is always a
+/// cancel.
+const FAST_FAILURE: Duration = if cfg!(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)) {
+    Duration::from_millis(350)
+} else {
+    Duration::ZERO
+};
 
 /// Everything a dialog needs to know, resolved once for either backend.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,8 +196,18 @@ impl FileDialogs {
         self.built_in.open
     }
 
-    /// Open a dialog. A newer request replaces any dialog still open, so the
+    /// Whether a system dialog is open.
+    pub fn native_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Open a dialog and return whether it opened.
+    ///
+    /// A system dialog can't be closed from here, so while one is open, new
+    /// requests are refused rather than stacking a second dialog on top of
+    /// it. A built-in browser that is still open is replaced, so the
     /// caller's purpose always matches the result `show` returns.
+    #[must_use]
     pub fn open(
         &mut self,
         mode: FileDialogMode,
@@ -192,21 +215,22 @@ impl FileDialogs {
         start: Option<&Path>,
         filename: impl Into<String>,
         extensions: &[&str],
-    ) {
+    ) -> bool {
+        if self.native_pending() {
+            return false;
+        }
         let request = DialogRequest::new(mode, title.into(), start, filename.into(), extensions);
         self.next_id += 1;
         let id = self.next_id;
-        // Any older system dialog is superseded; its answer will be ignored.
-        self.pending = None;
 
         let available = self.native.as_ref().map(|native| native.is_available());
         if choose_backend(self.prefer_native, available) == Backend::BuiltIn {
             self.open_built_in(&request);
-            return;
+            return true;
         }
         let Some(native) = &self.native else {
             self.open_built_in(&request);
-            return;
+            return true;
         };
         match native.launch(id, request.clone(), self.ctx.clone(), self.sender.clone()) {
             Ok(()) => {
@@ -222,6 +246,7 @@ impl FileDialogs {
                 self.open_built_in(&request);
             }
         }
+        true
     }
 
     /// Show the built-in browser if it is open and return an action when a
@@ -505,14 +530,14 @@ mod tests {
             .unwrap();
     }
 
-    fn open_save_splits(dialogs: &mut FileDialogs, start: &Path) {
+    fn open_save_splits(dialogs: &mut FileDialogs, start: &Path) -> bool {
         dialogs.open(
             FileDialogMode::Save,
             "Save Splits As",
             Some(start),
             "Game - Any%.lss",
             &["lss"],
-        );
+        )
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -538,21 +563,27 @@ mod tests {
         let path = PathBuf::from("/runs/a.lss");
         let fast = Duration::from_millis(10);
         let slow = Duration::from_secs(5);
+        let threshold = Duration::from_millis(350);
         assert_eq!(
-            classify(Ok(Some(path.clone())), fast, FAST_FAILURE),
+            classify(Ok(Some(path.clone())), fast, threshold),
             NativeOutcome::Picked(path)
         );
         assert!(matches!(
-            classify(Ok(None), fast, FAST_FAILURE),
+            classify(Ok(None), fast, threshold),
             NativeOutcome::Failed(_)
         ));
         assert_eq!(
-            classify(Ok(None), slow, FAST_FAILURE),
+            classify(Ok(None), slow, threshold),
             NativeOutcome::Cancelled
         );
         assert_eq!(
-            classify(Err("boom".to_string()), slow, FAST_FAILURE),
+            classify(Err("boom".to_string()), slow, threshold),
             NativeOutcome::Failed("boom".to_string())
+        );
+        // Without the portal heuristic, a fast empty answer is a cancel.
+        assert_eq!(
+            classify(Ok(None), fast, Duration::ZERO),
+            NativeOutcome::Cancelled
         );
     }
 
@@ -624,7 +655,7 @@ mod tests {
     fn native_request_matches_the_built_in_one() {
         let directory = temp_dir("native-request");
         let (mut dialogs, state) = fake(true);
-        open_save_splits(&mut dialogs, &directory);
+        assert!(open_save_splits(&mut dialogs, &directory));
         assert!(!dialogs.is_open());
         let launched = &state.lock().unwrap().launched;
         assert_eq!(launched.len(), 1);
@@ -662,8 +693,10 @@ mod tests {
         assert!(dialogs.is_open());
 
         let mut dialogs = FileDialogs::with_native(None);
-        open_save_splits(&mut dialogs, &directory);
+        assert!(open_save_splits(&mut dialogs, &directory));
         assert!(dialogs.is_open());
+        // The built-in browser can always be replaced by a new request.
+        assert!(dialogs.open(FileDialogMode::Open, "Open Layout", None, "", &["lsl"]));
     }
 
     #[test]
@@ -693,7 +726,8 @@ mod tests {
         let (mut dialogs, state) = fake(true);
 
         // An immediate empty answer means the portal never showed a dialog.
-        open_save_splits(&mut dialogs, &directory);
+        dialogs.fast_failure = Duration::from_millis(350);
+        assert!(open_save_splits(&mut dialogs, &directory));
         reply(&state, 1, Ok(None));
         assert_eq!(dialogs.poll_native(), None);
         assert!(dialogs.is_open());
@@ -707,16 +741,24 @@ mod tests {
     }
 
     #[test]
-    fn superseded_native_results_are_ignored() {
+    fn requests_are_refused_while_a_system_dialog_is_open() {
         let directory = std::env::temp_dir();
         let (mut dialogs, state) = fake(true);
         dialogs.fast_failure = Duration::ZERO;
 
-        open_save_splits(&mut dialogs, &directory);
-        dialogs.open(FileDialogMode::Open, "Open Layout", None, "", &["lsl"]);
-        reply(&state, 1, Ok(Some(PathBuf::from("/runs/Old.lss"))));
-        assert_eq!(dialogs.poll_native(), None);
+        assert!(open_save_splits(&mut dialogs, &directory));
+        assert!(dialogs.native_pending());
+        assert!(!dialogs.open(FileDialogMode::Open, "Open Layout", None, "", &["lsl"]));
+        assert_eq!(state.lock().unwrap().launched.len(), 1);
         assert!(!dialogs.is_open());
+
+        reply(&state, 1, Ok(Some(PathBuf::from("/runs/Run"))));
+        assert_eq!(
+            dialogs.poll_native(),
+            Some(FileDialogAction::Save(PathBuf::from("/runs/Run.lss")))
+        );
+        assert!(!dialogs.native_pending());
+        assert!(dialogs.open(FileDialogMode::Open, "Open Layout", None, "", &["lsl"]));
         reply(&state, 2, Ok(Some(PathBuf::from("/layouts/New.lsl"))));
         assert_eq!(
             dialogs.poll_native(),

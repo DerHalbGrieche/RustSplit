@@ -92,13 +92,11 @@ pub fn apply_command(timer: &mut Timer, command: &AutoSplitterCommand) -> Comman
             CommandEffect::default()
         }
         AutoSplitterCommand::SetVariable { key, value } => {
-            // Like LiveSplit's server `setcustomvariable`, but without marking
-            // the run as changed: auto splitters update variables constantly
-            // and that must not trigger saves or "unsaved changes" state.
-            let variables = &mut timer.run.metadata.custom_variables;
-            if variables.get(key) != Some(value) {
-                variables.insert(key.clone(), value.clone());
-            }
+            // Like in LiveSplit, auto splitter variables only live in memory:
+            // they are shown like the run's custom variables but are never
+            // written into the split file, and setting them does not mark the
+            // run as changed.
+            timer.set_temporary_variable(key, value);
             CommandEffect::default()
         }
     }

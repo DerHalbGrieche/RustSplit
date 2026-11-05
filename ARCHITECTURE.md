@@ -22,6 +22,11 @@ given a custom `Clock`.
 - `timer.rs` — `Timer` state machine. Mirrors LiveSplit's `TimerModel`:
   start, split, skip, undo, reset, pause, game time, loading times, offsets,
   attempts and comparison switching. `Clock`/`TestClock` make it testable.
+  `Timer::at(timestamp, action)` runs an action as if the clock read an
+  earlier moment (`Timer::timestamp_of(instant)`), so input that is handled
+  late is recorded when it arrived; a timestamp is never applied before the
+  timer's latest action. The timer also holds temporary custom variables (set
+  by auto splitters), which are shown but never saved.
 - `analysis.rs` — derived values used by components: live and previous-segment
   deltas, best segment checks, split colors, possible time save and predicted
   time.
@@ -64,9 +69,10 @@ reused by another frontend.
 ## rustsplit-server
 
 A `std::net` TCP server. Each client thread parses newline-delimited commands
-and sends `ServerRequest`s over a channel. An optional notifier wakes the app
-when a request is queued; the app drains the channel, mutates the timer on the
-UI thread, and sends the optional response back. This keeps all timer mutation
+and sends `ServerRequest`s over a channel, stamped with the moment the line was
+read. An optional notifier wakes the app when a request is queued; the app
+drains the channel, mutates the timer on the UI thread at the request's
+timestamp, and sends the optional response back. This keeps all timer mutation
 on one thread. Concurrent clients and line lengths are capped.
 
 ## rustsplit-auto-splitting
@@ -100,8 +106,10 @@ update() at the tick rate ──commands──►    AutoSplitterHost::poll
   the adapter answers from a prediction of their effect, so an auto splitter
   does not start or split twice while the UI catches up. Redundant commands
   are not sent at all.
-- `command.rs` — `apply_command`, run on the UI thread. Game time commands
-  are ignored without an attempt in progress, like livesplit-core does.
+- `command.rs` — `apply_command`, run on the UI thread at the moment the
+  command was issued. Game time commands are ignored without an attempt in
+  progress, like livesplit-core does. Variables go into the timer's temporary
+  variables, not the split file.
 - `snapshot.rs` — `TimerSnapshot` and the prediction, which mirrors
   `Timer`'s state machine (a test checks both agree).
 - `host.rs` — `AutoSplitterHost`, owned by the UI: load/unload, status, the
@@ -116,7 +124,16 @@ The desktop application and integration layer:
 
 - `main.rs` — CLI, startup, window options.
 - `app.rs` — eframe app, context menu, shortcuts, global hotkeys, server
-  polling, Niri geometry tracking, dialogs and persistence.
+  polling, Niri geometry tracking, dialogs and persistence. Input from other
+  threads (global hotkeys, server, control socket, auto splitter), the timer
+  actions it triggers, autosaves and the speedrun.com poll run in
+  `App::logic`, which eframe also calls while the window is minimized or
+  hidden; `ui` only handles egui input and draws.
+- `input.rs` — timer actions (`TimerAction`) and their application at the
+  moment they were triggered.
+- `settings_window.rs` — the Settings window. OK/Apply copy only the settings
+  edited in the window into the live config (`AppConfig::apply_settings_edits`),
+  Cancel and the close button discard the draft.
 - `auto_splitter.rs` — auto splitter menu, settings window and per-run
   selection (`settings.toml` `[auto_splitter]`, then the `.lss` `ScriptPath`).
   It notices when another split file is opened and loads or unloads the
@@ -147,7 +164,9 @@ The desktop application and integration layer:
 ## Data flow
 
 1. Timer state changes (keys, server, auto splitter, menu, editor) go through
-   `Timer`, always on the UI thread.
+   `Timer`, always on the UI thread. Input from other threads carries the
+   `Instant` it arrived at and is applied with `Timer::at`, so neither the
+   frame delay nor the 100 ms cadence of a hidden window changes split times.
 2. The renderer reads a snapshot: current phase/time, run segments, current
    comparison and timing method.
 3. Components compute display values with `rustsplit_core::analysis` and the

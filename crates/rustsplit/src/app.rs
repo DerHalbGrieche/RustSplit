@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{
-    Align2, Color32, Context, CursorIcon, Key, PointerButton, RichText, Sense, Ui, ViewportCommand,
+    Align2, Color32, Context, CursorIcon, Key, PointerButton, Sense, Ui, ViewportCommand,
     WindowLevel,
 };
 use rustsplit_core::{load_run, save_run, Run, Timer, TimerPhase, TimingMethod};
@@ -18,25 +18,16 @@ use crate::control::ControlServer;
 use crate::file_dialog::{FileDialogAction, FileDialogMode};
 use crate::file_dialogs::FileDialogs;
 use crate::hotkeys::{GlobalHotkeys, HotkeyAction};
+use crate::input::{apply_timer_action, TimerAction};
 use crate::layout_editor::{LayoutEditor, LayoutEditorEvent, BACKGROUND_IMAGE_EXTENSIONS};
 use crate::niri::{self, DesiredWindow, NiriIntegration};
 use crate::run_editor::{RunEditor, RunEditorEvent};
+use crate::settings_window::SettingsWindow;
 use crate::sounds::{self, SoundEvent, SoundPlayer};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
-    StartSplit,
-    Reset,
-    ResetAndSetPb,
-    Undo,
-    Skip,
-    Pause,
-    UndoAllPauses,
-    SwitchComparisonNext,
-    SwitchComparisonPrevious,
-    ToggleTimingMethod,
-    SetComparison(String),
-    SetTimingMethod(TimingMethod),
+    Timer(TimerAction),
     NewRun,
     EditRun,
     OpenRun,
@@ -75,8 +66,7 @@ pub struct RustSplitApp {
     layout_editor: LayoutEditor,
     file_dialog: FileDialogs,
     file_purpose: Option<FilePurpose>,
-    settings_open: bool,
-    settings_draft: Option<AppConfig>,
+    settings: Option<SettingsWindow>,
     about_open: bool,
     status: Option<(String, Instant)>,
     hotkeys: GlobalHotkeys,
@@ -85,7 +75,8 @@ pub struct RustSplitApp {
     control: Option<ControlServer>,
     auto_splitter: AutoSplitterUi,
     niri: Option<NiriIntegration>,
-    pending_actions: Vec<Action>,
+    /// Actions with the moment they were triggered.
+    pending_actions: Vec<(Action, Instant)>,
     last_window_size: Option<egui::Vec2>,
     last_window_pos: Option<egui::Pos2>,
     passthrough: bool,
@@ -131,8 +122,7 @@ impl RustSplitApp {
             layout_editor: LayoutEditor::default(),
             file_dialog: FileDialogs::default(),
             file_purpose: None,
-            settings_open: false,
-            settings_draft: None,
+            settings: None,
             about_open: false,
             status: Some((
                 "Right-click for the LiveSplit menu. Space starts/splits.".to_string(),
@@ -176,86 +166,46 @@ impl RustSplitApp {
         }
     }
 
+    fn push_action(&mut self, action: Action) {
+        self.pending_actions.push((action, Instant::now()));
+    }
+
     fn apply_actions(&mut self, ctx: &Context) {
-        let actions = std::mem::take(&mut self.pending_actions);
-        for action in actions {
-            let before = sounds::Snapshot::capture(&self.timer);
-            self.apply_action(ctx, action);
-            self.play_timer_sounds(&before);
+        for (action, received) in std::mem::take(&mut self.pending_actions) {
+            self.apply_action(ctx, action, received);
+        }
+    }
+
+    /// Applies a timer action at the moment it was received, plays its sound
+    /// and only then autosaves, so writing the split file can't delay the
+    /// sound.
+    fn run_timer_action(&mut self, action: &TimerAction, received: Instant) {
+        let before = sounds::Snapshot::capture(&self.timer);
+        let outcome = apply_timer_action(&mut self.timer, action, received);
+        self.play_timer_sounds(&before);
+        if let Some(status) = outcome.status {
+            self.set_status(status);
+        }
+        if outcome.autosave {
+            self.autosave_after_change();
         }
     }
 
     /// The single hook for timer sounds. Every timer action (shortcuts,
-    /// hotkeys, menu, server and control socket) captures a snapshot before it
-    /// runs and calls this afterwards.
+    /// hotkeys, menu, server, control socket and auto splitter) captures a
+    /// snapshot before it runs and calls this right after the timer changed,
+    /// before anything is saved.
     fn play_timer_sounds(&mut self, before: &sounds::Snapshot) {
         self.sounds
             .play_timer_change(before, &self.timer, &self.config.sounds);
     }
 
-    fn apply_action(&mut self, ctx: &Context, action: Action) {
+    fn apply_action(&mut self, ctx: &Context, action: Action, received: Instant) {
         match action {
-            Action::StartSplit => match self.timer.phase {
-                TimerPhase::NotRunning => {
-                    self.timer.start();
-                }
-                TimerPhase::Running | TimerPhase::Paused => {
-                    self.timer.split();
-                    if self.timer.phase == TimerPhase::Ended {
-                        self.autosave_after_change();
-                    }
-                }
-                TimerPhase::Ended => {}
-            },
-            Action::Reset => {
-                if self.timer.phase != TimerPhase::NotRunning {
-                    self.timer.reset();
-                    if self.timer.run.file_path.is_some() {
-                        self.set_status("Run reset.");
-                    } else {
-                        self.set_status("Run reset. Use Ctrl+S to save your splits.");
-                    }
-                    self.autosave_after_change();
-                }
-            }
-            Action::ResetAndSetPb => {
-                if self.timer.phase != TimerPhase::NotRunning {
-                    self.timer.reset_and_set_attempt_as_pb();
-                    self.set_status("Run reset and set as personal best.");
-                    self.autosave_after_change();
-                }
-            }
-            Action::Undo => self.timer.undo_split(),
-            Action::Skip => self.timer.skip_split(),
-            Action::Pause => {
-                self.timer.pause();
-                self.set_status(match self.timer.phase {
-                    TimerPhase::Paused => "Paused.",
-                    TimerPhase::Running => "Resumed.",
-                    _ => "Timer running.",
-                });
-            }
-            Action::UndoAllPauses => {
-                self.timer.undo_all_pauses();
-                self.set_status("Undid all pauses.");
-            }
-            Action::SwitchComparisonNext => self.timer.switch_comparison_next(),
-            Action::SwitchComparisonPrevious => self.timer.switch_comparison_previous(),
-            Action::ToggleTimingMethod => {
-                self.timer.toggle_timing_method();
-                self.set_status(format!(
-                    "Timing method: {}",
-                    self.timer.current_timing_method
-                ));
-            }
-            Action::SetComparison(comparison) => self.timer.set_current_comparison(comparison),
-            Action::SetTimingMethod(method) => {
-                self.timer.set_timing_method(method);
-                self.set_status(format!("Timing method: {method}"));
-            }
+            Action::Timer(action) => self.run_timer_action(&action, received),
             Action::NewRun => {
                 let run = Run::with_segments("", "", ["Segment 1"]);
-                self.timer.set_run(run);
+                self.switch_run(run);
                 self.run_editor.open(&self.timer.run);
                 self.set_status("New run created.");
             }
@@ -273,14 +223,14 @@ impl RustSplitApp {
                     .file_path
                     .clone()
                     .or_else(|| self.config.general.last_run.clone());
-                self.file_dialog.open(
+                self.open_file_dialog(
+                    FilePurpose::OpenRun,
                     FileDialogMode::Open,
                     "Open Splits",
                     start.as_deref(),
                     "",
                     &["lss"],
                 );
-                self.file_purpose = Some(FilePurpose::OpenRun);
             }
             Action::OpenRunPath(path) => {
                 let _ = self.open_run_path(ctx, &path);
@@ -300,14 +250,14 @@ impl RustSplitApp {
                     .file_path
                     .clone()
                     .or_else(|| self.config.general.last_layout.clone());
-                self.file_dialog.open(
+                self.open_file_dialog(
+                    FilePurpose::OpenLayout,
                     FileDialogMode::Open,
                     "Open Layout",
                     start.as_deref(),
                     "",
                     &["lsl"],
                 );
-                self.file_purpose = Some(FilePurpose::OpenLayout);
             }
             Action::SaveLayout => {
                 if let Err(error) = self.save_current_layout(false) {
@@ -315,14 +265,7 @@ impl RustSplitApp {
                 }
             }
             Action::SaveLayoutAs => {
-                self.file_dialog.open(
-                    FileDialogMode::Save,
-                    "Save Layout As",
-                    self.layout.file_path.as_deref(),
-                    format!("{}.lsl", default_layout_name(&self.layout)),
-                    &["lsl"],
-                );
-                self.file_purpose = Some(FilePurpose::SaveLayout);
+                self.open_save_dialog_for_layout(self.layout.file_path.clone());
             }
             Action::DefaultLayout => {
                 self.layout =
@@ -343,8 +286,10 @@ impl RustSplitApp {
                 }
             }
             Action::Settings => {
-                self.settings_draft = Some(self.config.clone());
-                self.settings_open = true;
+                // Opening it again keeps the edits made so far.
+                if self.settings.is_none() {
+                    self.settings = Some(SettingsWindow::new(&self.config));
+                }
             }
             Action::About => self.about_open = true,
             Action::Quit => {
@@ -357,7 +302,7 @@ impl RustSplitApp {
     fn open_run_path(&mut self, _ctx: &Context, path: &Path) -> bool {
         match load_run(path) {
             Ok(run) => {
-                self.timer.set_run(run);
+                self.switch_run(run);
                 self.timer.run.has_changed = false;
                 self.config.remember_run(path);
                 self.save_config();
@@ -369,6 +314,48 @@ impl RustSplitApp {
                 self.set_status(format!("Could not open splits: {error}"));
                 false
             }
+        }
+    }
+
+    /// Replaces the run with another one (opened, new or switched to by the
+    /// server). Like LiveSplit, an attempt in progress is reset first, which
+    /// records it in the old run, and the old run is autosaved. Switching
+    /// runs plays no sound.
+    fn switch_run(&mut self, run: Run) {
+        if self.timer.phase != TimerPhase::NotRunning {
+            self.timer.reset();
+            self.autosave_after_change();
+        }
+        self.timer.set_run(run);
+    }
+
+    /// Opens a file dialog for `purpose`. While a system dialog is still
+    /// open, the request is refused instead of stacking a second dialog.
+    fn open_file_dialog(
+        &mut self,
+        purpose: FilePurpose,
+        mode: FileDialogMode,
+        title: impl Into<String>,
+        start: Option<&Path>,
+        filename: impl Into<String>,
+        extensions: &[&str],
+    ) {
+        if !self
+            .file_dialog
+            .open(mode, title, start, filename, extensions)
+        {
+            self.set_status("A file dialog is already open.");
+            if purpose == FilePurpose::BackgroundImage {
+                self.layout_editor.cancel_background_image();
+            }
+            return;
+        }
+        // A built-in browser that was still open for another purpose is
+        // replaced.
+        let previous = self.file_purpose.replace(purpose.clone());
+        if previous == Some(FilePurpose::BackgroundImage) && purpose != FilePurpose::BackgroundImage
+        {
+            self.layout_editor.cancel_background_image();
         }
     }
 
@@ -427,31 +414,38 @@ impl RustSplitApp {
         } else {
             format!("{}.lss", self.timer.run.extended_file_name())
         };
-        self.file_dialog.open(
+        let start = self
+            .timer
+            .run
+            .file_path
+            .clone()
+            .or_else(|| self.config.general.last_run.clone());
+        self.open_file_dialog(
+            FilePurpose::SaveRun,
             FileDialogMode::Save,
             "Save Splits As",
-            self.timer
-                .run
-                .file_path
-                .as_deref()
-                .or(self.config.general.last_run.as_deref()),
+            start.as_deref(),
             file_name,
             &["lss"],
         );
-        self.file_purpose = Some(FilePurpose::SaveRun);
+    }
+
+    fn open_save_dialog_for_layout(&mut self, start: Option<PathBuf>) {
+        let file_name = format!("{}.lsl", default_layout_name(&self.layout));
+        self.open_file_dialog(
+            FilePurpose::SaveLayout,
+            FileDialogMode::Save,
+            "Save Layout As",
+            start.as_deref(),
+            file_name,
+            &["lsl"],
+        );
     }
 
     fn save_current_layout(&mut self, silent: bool) -> Result<(), String> {
         let Some(path) = self.layout.file_path.clone() else {
             if !silent {
-                self.file_dialog.open(
-                    FileDialogMode::Save,
-                    "Save Layout As",
-                    None,
-                    format!("{}.lsl", default_layout_name(&self.layout)),
-                    &["lsl"],
-                );
-                self.file_purpose = Some(FilePurpose::SaveLayout);
+                self.open_save_dialog_for_layout(None);
             }
             return Ok(());
         };
@@ -522,8 +516,15 @@ impl RustSplitApp {
                 }
             }
             Some(FilePurpose::Sound(event)) => {
-                if let Some(draft) = self.settings_draft.as_mut() {
-                    *event.path_mut(&mut draft.sounds) = Some(path);
+                if let Some(settings) = self.settings.as_mut() {
+                    *event.path_mut(settings.draft_sounds_mut()) = Some(path);
+                } else {
+                    // The Settings window was closed while the system dialog
+                    // was open. The choice was explicit, so keep it.
+                    self.set_status(format!("{} sound set.", event.label()));
+                    *event.path_mut(&mut self.config.sounds) = Some(path);
+                    self.sounds.preload(&self.config.sounds);
+                    self.save_config();
                 }
             }
             Some(FilePurpose::BackgroundImage) => self.layout_editor.set_background_image(path),
@@ -558,6 +559,15 @@ impl RustSplitApp {
     }
 
     fn handle_editor_event(&mut self, ctx: &Context, event: RunEditorEvent) {
+        if event != RunEditorEvent::None
+            && event != RunEditorEvent::Cancel
+            && self.timer.phase != TimerPhase::NotRunning
+        {
+            // The draft was copied before the attempt started; applying it
+            // would throw the attempt away. The editor stays open.
+            self.set_status("Finish or reset the run before applying split changes.");
+            return;
+        }
         match event {
             RunEditorEvent::None | RunEditorEvent::Cancel => {}
             RunEditorEvent::Apply | RunEditorEvent::ApplyAndClose => {
@@ -620,14 +630,7 @@ impl RustSplitApp {
                             self.set_status(format!("Could not save layout: {error}"));
                         }
                     } else {
-                        self.file_dialog.open(
-                            FileDialogMode::Save,
-                            "Save Layout As",
-                            None,
-                            format!("{}.lsl", default_layout_name(&self.layout)),
-                            &["lsl"],
-                        );
-                        self.file_purpose = Some(FilePurpose::SaveLayout);
+                        self.open_save_dialog_for_layout(None);
                     }
                 }
             }
@@ -637,14 +640,7 @@ impl RustSplitApp {
                     self.layout = layout;
                     self.apply_layout_change(ctx);
                 }
-                self.file_dialog.open(
-                    FileDialogMode::Save,
-                    "Save Layout As",
-                    None,
-                    format!("{}.lsl", default_layout_name(&self.layout)),
-                    &["lsl"],
-                );
-                self.file_purpose = Some(FilePurpose::SaveLayout);
+                self.open_save_dialog_for_layout(None);
             }
             LayoutEditorEvent::ResetDefault => {
                 self.layout =
@@ -652,18 +648,21 @@ impl RustSplitApp {
                 self.apply_layout_change(ctx);
             }
             LayoutEditorEvent::BrowseBackgroundImage => {
-                self.file_dialog.open(
+                let start = self.layout_editor.background_image_start();
+                self.open_file_dialog(
+                    FilePurpose::BackgroundImage,
                     FileDialogMode::Open,
                     "Choose Background Image",
-                    self.layout_editor.background_image_start().as_deref(),
+                    start.as_deref(),
                     "",
                     BACKGROUND_IMAGE_EXTENSIONS,
                 );
-                self.file_purpose = Some(FilePurpose::BackgroundImage);
             }
         }
     }
 
+    /// Keyboard shortcuts of the overlay. egui has no per-event timestamps,
+    /// so these are applied at "now", within the frame they arrived in.
     fn handle_local_shortcuts(&mut self, ctx: &Context) {
         if ctx.egui_wants_keyboard_input() || ctx.any_popup_open() {
             return;
@@ -675,80 +674,78 @@ impl RustSplitApp {
                 input.modifiers.alt,
             )
         });
+        let mut actions = Vec::new();
         if ctrl {
             if key_pressed_once(ctx, Key::Q) {
-                self.pending_actions.push(Action::Quit);
+                actions.push(Action::Quit);
             }
             if key_pressed_once(ctx, Key::S) {
-                self.pending_actions.push(if shift {
+                actions.push(if shift {
                     Action::SaveRunAs
                 } else {
                     Action::SaveRun
                 });
             }
             if key_pressed_once(ctx, Key::O) {
-                self.pending_actions.push(Action::OpenRun);
+                actions.push(Action::OpenRun);
             }
             if key_pressed_once(ctx, Key::E) {
-                self.pending_actions.push(Action::EditRun);
+                actions.push(Action::EditRun);
             }
             if key_pressed_once(ctx, Key::L) {
-                self.pending_actions.push(Action::EditLayout);
+                actions.push(Action::EditLayout);
             }
-            return;
+        } else if !alt {
+            let keys = [
+                (Key::Space, TimerAction::StartSplit),
+                (Key::R, TimerAction::Reset),
+                (Key::Backspace, TimerAction::Undo),
+                (Key::Delete, TimerAction::Skip),
+                (Key::P, TimerAction::Pause),
+                (Key::U, TimerAction::UndoAllPauses),
+                (Key::G, TimerAction::ToggleTimingMethod),
+            ];
+            for (key, action) in keys {
+                if key_pressed_once(ctx, key) {
+                    actions.push(Action::Timer(action));
+                }
+            }
+            if key_pressed_once(ctx, Key::F1) {
+                actions.push(Action::Settings);
+            }
+            if key_pressed_once(ctx, Key::Tab) {
+                actions.push(Action::Timer(if shift {
+                    TimerAction::SwitchComparisonPrevious
+                } else {
+                    TimerAction::SwitchComparisonNext
+                }));
+            }
         }
-        if alt {
-            return;
-        }
-        if key_pressed_once(ctx, Key::Space) {
-            self.pending_actions.push(Action::StartSplit);
-        }
-        if key_pressed_once(ctx, Key::R) {
-            self.pending_actions.push(Action::Reset);
-        }
-        if key_pressed_once(ctx, Key::Backspace) {
-            self.pending_actions.push(Action::Undo);
-        }
-        if key_pressed_once(ctx, Key::Delete) {
-            self.pending_actions.push(Action::Skip);
-        }
-        if key_pressed_once(ctx, Key::P) {
-            self.pending_actions.push(Action::Pause);
-        }
-        if key_pressed_once(ctx, Key::U) {
-            self.pending_actions.push(Action::UndoAllPauses);
-        }
-        if key_pressed_once(ctx, Key::G) {
-            self.pending_actions.push(Action::ToggleTimingMethod);
-        }
-        if key_pressed_once(ctx, Key::F1) {
-            self.pending_actions.push(Action::Settings);
-        }
-        if key_pressed_once(ctx, Key::Tab) {
-            self.pending_actions.push(if shift {
-                Action::SwitchComparisonPrevious
-            } else {
-                Action::SwitchComparisonNext
-            });
+        for action in actions {
+            self.push_action(action);
         }
     }
 
     fn poll_global_hotkeys(&mut self) {
-        for action in self.hotkeys.poll() {
+        for (action, pressed) in self.hotkeys.poll() {
             let action = match action {
-                HotkeyAction::StartSplit => Action::StartSplit,
-                HotkeyAction::Reset => Action::Reset,
-                HotkeyAction::Undo => Action::Undo,
-                HotkeyAction::Skip => Action::Skip,
-                HotkeyAction::Pause => Action::Pause,
-                HotkeyAction::UndoAllPauses => Action::UndoAllPauses,
-                HotkeyAction::SwitchComparisonNext => Action::SwitchComparisonNext,
-                HotkeyAction::SwitchComparisonPrevious => Action::SwitchComparisonPrevious,
-                HotkeyAction::ToggleTimingMethod => Action::ToggleTimingMethod,
+                HotkeyAction::StartSplit => Action::Timer(TimerAction::StartSplit),
+                HotkeyAction::Reset => Action::Timer(TimerAction::Reset),
+                HotkeyAction::Undo => Action::Timer(TimerAction::Undo),
+                HotkeyAction::Skip => Action::Timer(TimerAction::Skip),
+                HotkeyAction::Pause => Action::Timer(TimerAction::Pause),
+                HotkeyAction::UndoAllPauses => Action::Timer(TimerAction::UndoAllPauses),
+                HotkeyAction::SwitchComparisonNext => {
+                    Action::Timer(TimerAction::SwitchComparisonNext)
+                }
+                HotkeyAction::SwitchComparisonPrevious => {
+                    Action::Timer(TimerAction::SwitchComparisonPrevious)
+                }
+                HotkeyAction::ToggleTimingMethod => Action::Timer(TimerAction::ToggleTimingMethod),
                 HotkeyAction::EditRun => Action::EditRun,
                 HotkeyAction::EditLayout => Action::EditLayout,
             };
-            self.pending_actions.push(action);
+            self.pending_actions.push((action, pressed));
         }
     }
 
@@ -817,12 +814,19 @@ impl RustSplitApp {
             let Some(request) = request else {
                 break;
             };
-            let response = self.apply_server_command(ctx, &request.command);
+            let response = self.apply_server_command(ctx, &request.command, request.received);
             request.respond(response);
         }
     }
 
-    fn apply_server_command(&mut self, ctx: &Context, command: &ServerCommand) -> Option<String> {
+    /// Applies a server or control socket command at the moment it was
+    /// `received`.
+    fn apply_server_command(
+        &mut self,
+        ctx: &Context,
+        command: &ServerCommand,
+        received: Instant,
+    ) -> Option<String> {
         match command {
             ServerCommand::SwitchSplits(path) => {
                 let ok = self.open_run_path(ctx, &PathBuf::from(path));
@@ -837,7 +841,8 @@ impl RustSplitApp {
 
         let autosave = server_command_mutates_run(command);
         let before = sounds::Snapshot::capture(&self.timer);
-        let outcome = handle_command(&mut self.timer, command);
+        let at = self.timer.timestamp_of(received);
+        let outcome = self.timer.at(at, |timer| handle_command(timer, command));
         self.play_timer_sounds(&before);
         let response = outcome.response.clone();
         if outcome.save {
@@ -864,16 +869,18 @@ impl RustSplitApp {
             let Some(request) = request else {
                 break;
             };
-            let response = self.apply_control_command(ctx, &request.command);
+            let response = self.apply_control_command(ctx, &request.command, request.received);
             request.respond(response);
         }
     }
 
     /// Applies commands from the auto splitter thread (see `auto_splitter.rs`).
     fn poll_auto_splitter(&mut self) {
+        let before = sounds::Snapshot::capture(&self.timer);
         let outcome = self
             .auto_splitter
             .update(&mut self.timer, &mut self.config.auto_splitter);
+        self.play_timer_sounds(&before);
         if outcome.autosave {
             self.autosave_after_change();
         }
@@ -885,7 +892,12 @@ impl RustSplitApp {
         }
     }
 
-    fn apply_control_command(&mut self, ctx: &Context, command: &str) -> Option<String> {
+    fn apply_control_command(
+        &mut self,
+        ctx: &Context,
+        command: &str,
+        received: Instant,
+    ) -> Option<String> {
         let command = command.trim();
         let action = match command.to_ascii_lowercase().as_str() {
             "editrun" | "edit-run" | "editsplits" => Some(Action::EditRun),
@@ -894,12 +906,12 @@ impl RustSplitApp {
             _ => None,
         };
         if let Some(action) = action {
-            self.pending_actions.push(action);
+            self.pending_actions.push((action, received));
             return Some("ok".to_string());
         }
 
         match parse_command(command) {
-            Ok(command) => self.apply_server_command(ctx, &command),
+            Ok(command) => self.apply_server_command(ctx, &command, received),
             Err(error) => Some(format!("error: {error}")),
         }
     }
@@ -935,186 +947,60 @@ impl RustSplitApp {
     }
 
     fn show_settings(&mut self, ctx: &Context) {
-        if !self.settings_open {
-            return;
-        }
-        let Some(draft) = self.settings_draft.as_mut() else {
-            self.settings_open = false;
+        let Some(settings) = self.settings.as_mut() else {
             return;
         };
-        let mut open = self.settings_open;
-        let mut apply = false;
-        let mut browse_sound = None;
-        let sound_player = &mut self.sounds;
-        let hotkey_error = self.hotkeys.error.clone();
-        let server_error = self.server_error.clone();
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(560.0)
-            .default_height(520.0)
-            .default_pos(egui::pos2(12.0, 12.0))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("settings-scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                ui.heading("Hotkeys");
-                ui.checkbox(
-                    &mut draft.hotkeys.enabled,
-                    "Enable global hotkeys (X11 only; use compositor binds on Wayland)",
-                );
-                if let Some(error) = &hotkey_error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                }
-                egui::Grid::new("hotkey-grid")
-                    .num_columns(2)
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for action in HotkeyAction::all() {
-                            ui.label(action.label());
-                            let value = action.config_value_mut(&mut draft.hotkeys);
-                            ui.add(
-                                egui::TextEdit::singleline(value)
-                                    .hint_text("e.g. F1 or control+shift+F12")
-                                    .desired_width(220.0),
-                            );
-                            ui.end_row();
-                        }
-                    });
-                ui.label(
-                    RichText::new("Use names like Space, F1, control+KeyS, shift+alt+KeyR.")
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-                ui.label(
-                    RichText::new(
-                        "Wayland/Niri: bind `rustsplit --command startorsplit` in your compositor instead.",
-                    )
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-                );
-                ui.separator();
-                ui.heading("LiveSplit Server");
-                ui.checkbox(&mut draft.server.enabled, "Enable server");
-                ui.checkbox(&mut draft.server.autostart, "Start automatically");
-                ui.horizontal(|ui| {
-                    ui.label("Port:");
-                    ui.add(egui::DragValue::new(&mut draft.server.port).range(1..=65535));
-                    ui.label("Bind:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut draft.server.bind_address)
-                            .desired_width(120.0),
-                    );
-                });
-                if let Some(error) = &server_error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                }
-                ui.separator();
-                ui.heading("Behavior");
-                ui.checkbox(&mut draft.general.autosave, "Autosave splits on reset/finish");
-                ui.checkbox(
-                    &mut draft.general.autosave_layout,
-                    "Autosave layout after applying",
-                );
-                ui.add_enabled(
-                    cfg!(feature = "native-dialogs"),
-                    egui::Checkbox::new(
-                        &mut draft.general.use_system_file_dialogs,
-                        "Use system file dialogs",
-                    ),
-                )
-                .on_hover_text(
-                    "Use the desktop's file chooser (XDG portal on Linux). \
-                     Falls back to the built-in browser when it is unavailable.",
-                )
-                .on_disabled_hover_text("This build has no system file dialogs.");
-                #[cfg(feature = "speedrun-com")]
-                {
-                    ui.separator();
-                    ui.heading("speedrun.com");
-                    ui.checkbox(
-                        &mut draft.speedrun_com.fetch_world_records,
-                        "Fetch world records from speedrun.com",
-                    );
-                    ui.label(
-                        RichText::new(
-                            "Used by the World Record component. Sends the game, category and filters to speedrun.com.",
-                        )
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                    );
-                }
-                ui.separator();
-                ui.heading("Sounds");
-                browse_sound = sounds::settings_ui(ui, &mut draft.sounds, sound_player);
-                if niri::is_session() {
-                    ui.separator();
-                    ui.heading("Niri");
-                    ui.checkbox(&mut draft.niri.enabled, "Enable Niri integration");
-                    ui.checkbox(
-                        &mut draft.niri.auto_float,
-                        "Float the overlay automatically",
-                    );
-                    ui.label(
-                        RichText::new(
-                            "Uses Niri's IPC socket to float the overlay and remember its position and size.",
-                        )
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                    );
-                }
-                if ui.button("Apply").clicked() {
-                    apply = true;
-                }
-                ui.separator();
-                ui.label(
-                    RichText::new("RustSplit — a native Rust rewrite of LiveSplit")
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-                    });
-            });
-        self.settings_open = open;
-        if let Some(event) = browse_sound.filter(|_| open) {
+        let response = settings.show(
+            ctx,
+            &mut self.sounds,
+            self.hotkeys.error.as_deref(),
+            self.server_error.as_deref(),
+        );
+        if response.apply {
+            self.apply_settings(ctx);
+        }
+        if response.close {
+            self.settings = None;
+            return;
+        }
+        if let Some(event) = response.browse_sound {
             let start = self
-                .settings_draft
+                .settings
                 .as_ref()
-                .and_then(|draft| event.path(&draft.sounds))
+                .and_then(|settings| event.path(settings.draft_sounds()))
                 .map(Path::to_path_buf);
-            self.file_dialog.open(
+            self.open_file_dialog(
+                FilePurpose::Sound(event),
                 FileDialogMode::Open,
                 format!("Choose Sound: {}", event.label()),
                 start.as_deref(),
                 "",
                 &["wav", "ogg", "oga", "mp3", "flac"],
             );
-            self.file_purpose = Some(FilePurpose::Sound(event));
         }
-        if apply || !open {
-            let old_config = self.config.clone();
-            if let Some(draft) = self.settings_draft.take() {
-                self.config = draft;
-            }
-            self.hotkeys.re_register(&self.config.hotkeys);
-            if self.config.server.port != old_config.server.port
-                || self.config.server.enabled != old_config.server.enabled
-                || self.config.server.bind_address != old_config.server.bind_address
-            {
-                let wanted = self.config.server.enabled;
-                self.stop_server();
-                if wanted {
-                    self.start_server(ctx);
-                }
-            }
-            self.sync_niri();
-            self.sounds.preload(&self.config.sounds);
-            self.save_config();
-            if !self.settings_open {
-                self.settings_draft = None;
+    }
+
+    /// Applies the Settings window's edits and keeps the window open.
+    fn apply_settings(&mut self, ctx: &Context) {
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        let old_config = self.config.clone();
+        settings.apply_to(&mut self.config);
+        self.hotkeys.re_register(&self.config.hotkeys);
+        if self.config.server.port != old_config.server.port
+            || self.config.server.enabled != old_config.server.enabled
+            || self.config.server.bind_address != old_config.server.bind_address
+        {
+            let wanted = self.config.server.enabled;
+            self.stop_server();
+            if wanted {
+                self.start_server(ctx);
             }
         }
+        self.sync_niri();
+        self.sounds.preload(&self.config.sounds);
+        self.save_config();
     }
 
     fn show_about(&mut self, ctx: &Context) {
@@ -1147,7 +1033,9 @@ impl RustSplitApp {
         let action = self.file_dialog.show(ctx);
         if let Some(action) = action {
             if action == FileDialogAction::Cancel {
-                self.file_purpose = None;
+                if self.file_purpose.take() == Some(FilePurpose::BackgroundImage) {
+                    self.layout_editor.cancel_background_image();
+                }
             } else {
                 self.handle_file_action(ctx, action);
             }
@@ -1179,32 +1067,32 @@ impl RustSplitApp {
         let mut actions = Vec::new();
         ui.set_min_width(240.0);
         if ui.button("Start / Split        Space").clicked() {
-            actions.push(Action::StartSplit);
+            actions.push(Action::Timer(TimerAction::StartSplit));
             ui.close();
         }
         if ui.button("Pause / Resume       P").clicked() {
-            actions.push(Action::Pause);
+            actions.push(Action::Timer(TimerAction::Pause));
             ui.close();
         }
         if ui.button("Undo Split           Backspace").clicked() {
-            actions.push(Action::Undo);
+            actions.push(Action::Timer(TimerAction::Undo));
             ui.close();
         }
         if ui.button("Skip Split           Delete").clicked() {
-            actions.push(Action::Skip);
+            actions.push(Action::Timer(TimerAction::Skip));
             ui.close();
         }
         ui.separator();
         if ui.button("Reset                R").clicked() {
-            actions.push(Action::Reset);
+            actions.push(Action::Timer(TimerAction::Reset));
             ui.close();
         }
         if ui.button("Reset and Set as Personal Best").clicked() {
-            actions.push(Action::ResetAndSetPb);
+            actions.push(Action::Timer(TimerAction::ResetAndSetPb));
             ui.close();
         }
         if ui.button("Undo All Pauses      U").clicked() {
-            actions.push(Action::UndoAllPauses);
+            actions.push(Action::Timer(TimerAction::UndoAllPauses));
             ui.close();
         }
         ui.separator();
@@ -1213,7 +1101,7 @@ impl RustSplitApp {
             for comparison in comparisons {
                 let selected = comparison == self.timer.current_comparison;
                 if ui.selectable_label(selected, &comparison).clicked() {
-                    actions.push(Action::SetComparison(comparison));
+                    actions.push(Action::Timer(TimerAction::SetComparison(comparison)));
                     ui.close();
                 }
             }
@@ -1222,7 +1110,7 @@ impl RustSplitApp {
             for method in [TimingMethod::RealTime, TimingMethod::GameTime] {
                 let selected = method == self.timer.current_timing_method;
                 if ui.selectable_label(selected, method.to_string()).clicked() {
-                    actions.push(Action::SetTimingMethod(method));
+                    actions.push(Action::Timer(TimerAction::SetTimingMethod(method)));
                     ui.close();
                 }
             }
@@ -1319,21 +1207,14 @@ impl RustSplitApp {
             actions.push(Action::Quit);
             ui.close();
         }
-        self.pending_actions.extend(actions);
+        for action in actions {
+            self.push_action(action);
+        }
     }
 
     fn draw_overlay_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
-        #[cfg(feature = "speedrun-com")]
-        {
-            self.renderer.world_record = self.world_records.update(
-                &ctx,
-                self.config.speedrun_com.fetch_world_records,
-                &self.layout,
-                &self.timer,
-            );
-        }
         self.renderer.draw(ui, &self.layout, &self.timer);
 
         // Whole-window drag support.  Buttons and dialogs sit above this
@@ -1410,7 +1291,7 @@ impl RustSplitApp {
         self.run_editor.open
             || self.layout_editor.open
             || self.file_dialog.is_open()
-            || self.settings_open
+            || self.settings.is_some()
             || self.about_open
             || self.auto_splitter.window_open()
     }
@@ -1569,21 +1450,46 @@ impl eframe::App for RustSplitApp {
         egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
 
+    /// Everything that isn't drawing: input from other threads, the timer
+    /// actions it triggers, autosaves and background lookups. eframe calls
+    /// this before every `ui`, and also while the window is minimized or
+    /// hidden (then about every 100 ms, or when another thread requests a
+    /// repaint), when `ui` is not called at all. Input is timestamped where
+    /// it arrives, so that delay does not change the recorded times.
+    fn logic(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.poll_global_hotkeys();
+        self.poll_server(ctx);
+        self.poll_control(ctx);
+        // Hotkeys, UI commands of the control socket and menu actions of the
+        // last frame.
+        self.apply_actions(ctx);
+        self.poll_auto_splitter();
+        #[cfg(feature = "speedrun-com")]
+        {
+            self.renderer.world_record = self.world_records.update(
+                ctx,
+                self.config.speedrun_com.fetch_world_records,
+                &self.layout,
+                &self.timer,
+            );
+        }
+        self.auto_splitter.publish(&self.timer);
+
+        // The server, control socket, hotkeys and the auto splitter request
+        // a repaint when something arrives, so the idle cadence only has to
+        // follow the timer (and the auto splitter's game time updates).
+        let repaint = match self.timer.phase {
+            TimerPhase::Running => Duration::from_millis(16),
+            TimerPhase::Paused => Duration::from_millis(100),
+            _ => Duration::from_millis(250),
+        };
+        ctx.request_repaint_after(repaint);
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.poll_global_hotkeys();
-        self.poll_server(&ctx);
-        self.poll_control(&ctx);
-        self.poll_auto_splitter();
         self.handle_dropped_files(&ctx);
-
-        let modal_open = self.run_editor.open
-            || self.layout_editor.open
-            || self.file_dialog.is_open()
-            || self.settings_open
-            || self.about_open
-            || self.auto_splitter.window_open();
-        if !modal_open {
+        if !self.any_modal_open() {
             self.handle_local_shortcuts(&ctx);
         }
         self.apply_actions(&ctx);
@@ -1609,15 +1515,6 @@ impl eframe::App for RustSplitApp {
         self.auto_splitter.publish(&self.timer);
         self.update_window_metadata(&ctx);
         self.store_window_geometry();
-
-        // The server and control socket request a repaint when a command
-        // arrives, so the idle cadence only has to follow the timer.
-        let repaint = match self.timer.phase {
-            TimerPhase::Running => Duration::from_millis(16),
-            TimerPhase::Paused => Duration::from_millis(100),
-            _ => Duration::from_millis(250),
-        };
-        ctx.request_repaint_after(repaint);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

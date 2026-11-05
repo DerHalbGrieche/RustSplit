@@ -89,6 +89,12 @@ impl LayoutEditor {
             .or_else(|| draft.file_path.clone())
     }
 
+    /// The background image dialog closed without a choice (or never
+    /// opened), so Escape closes the editor again.
+    pub fn cancel_background_image(&mut self) {
+        self.picking_image = false;
+    }
+
     /// Use `path` as the draft's background image.
     pub fn set_background_image(&mut self, path: PathBuf) {
         self.picking_image = false;

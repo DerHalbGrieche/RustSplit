@@ -781,13 +781,18 @@ pub fn draw_text(ui: &mut Ui, rect: Rect, ctx: &mut ComponentContext, settings: 
 
 fn custom_variable_value(ctx: &ComponentContext, name: &str) -> Option<String> {
     let name = name.trim().trim_start_matches('{').trim_end_matches('}');
+    // Temporary variables (from an auto splitter) first, then the run's own.
     ctx.timer
-        .run
-        .metadata
-        .custom_variables
-        .get(name)
-        .or_else(|| ctx.timer.run.metadata.variables.get(name))
-        .cloned()
+        .custom_variable(name)
+        .or_else(|| {
+            ctx.timer
+                .run
+                .metadata
+                .variables
+                .get(name)
+                .map(String::as_str)
+        })
+        .map(str::to_string)
 }
 
 fn substitute_variables(text: &str, ctx: &ComponentContext) -> String {
@@ -2528,6 +2533,28 @@ mod tests {
         assert_eq!(
             world_record_text(Some(&record), &timer, TimingMethod::GameTime, 1).as_deref(),
             Some("1:23")
+        );
+    }
+
+    #[test]
+    fn text_shows_temporary_and_permanent_variables() {
+        let mut timer = Timer::with_system_clock(rustsplit_core::Run::new("Game", "Any%"));
+        timer
+            .run
+            .metadata
+            .custom_variables
+            .insert("Route".to_string(), "Glitchless".to_string());
+        timer.set_temporary_variable("Deaths", "3");
+        let theme = crate::layout::LayoutSettings::default();
+        let mut icons = crate::icon::IconCache::default();
+        let ctx = ComponentContext::new(&timer, &theme, &mut icons, 1.0);
+        assert_eq!(
+            custom_variable_value(&ctx, "{Deaths}").as_deref(),
+            Some("3")
+        );
+        assert_eq!(
+            substitute_variables("{Route}: {Deaths} deaths", &ctx),
+            "Glitchless: 3 deaths"
         );
     }
 }

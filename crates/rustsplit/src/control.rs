@@ -36,7 +36,7 @@ mod platform {
     use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
     use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use egui::Context;
 
@@ -47,6 +47,9 @@ mod platform {
 
     pub struct ControlRequest {
         pub command: String,
+        /// When the command was read from the socket. Timer commands are
+        /// applied at this moment, not when the UI thread gets to them.
+        pub received: Instant,
         respond: Option<SyncSender<Option<String>>>,
     }
 
@@ -202,6 +205,7 @@ mod platform {
                 return;
             }
         }
+        let received = Instant::now();
         let command = line.trim_end_matches(['\r', '\n']).trim().to_string();
         if command.is_empty() {
             return;
@@ -211,6 +215,7 @@ mod platform {
         if sender
             .send(ControlRequest {
                 command,
+                received,
                 respond: Some(response_sender),
             })
             .is_err()
@@ -292,10 +297,13 @@ mod platform {
 
 #[cfg(not(unix))]
 mod platform {
+    use std::time::Instant;
+
     use egui::Context;
 
     pub struct ControlRequest {
         pub command: String,
+        pub received: Instant,
     }
 
     impl ControlRequest {
