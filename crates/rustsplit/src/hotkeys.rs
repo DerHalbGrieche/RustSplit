@@ -58,7 +58,7 @@ impl HotkeyAction {
         ]
     }
 
-    pub fn config_value<'a>(self, config: &'a HotkeyConfig) -> &'a str {
+    pub fn config_value(self, config: &HotkeyConfig) -> &str {
         match self {
             Self::StartSplit => &config.start_split,
             Self::Reset => &config.reset,
@@ -74,7 +74,7 @@ impl HotkeyAction {
         }
     }
 
-    pub fn config_value_mut<'a>(self, config: &'a mut HotkeyConfig) -> &'a mut String {
+    pub fn config_value_mut(self, config: &mut HotkeyConfig) -> &mut String {
         match self {
             Self::StartSplit => &mut config.start_split,
             Self::Reset => &mut config.reset,

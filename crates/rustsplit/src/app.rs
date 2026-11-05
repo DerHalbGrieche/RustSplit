@@ -5,14 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{
-    Align2, Color32, Context, CursorIcon, Key, PointerButton, RichText, Sense, Ui,
-    ViewportCommand, WindowLevel,
+    Align2, Color32, Context, CursorIcon, Key, PointerButton, RichText, Sense, Ui, ViewportCommand,
+    WindowLevel,
 };
-use livesplit_core::{load_run, save_run, Run, Timer, TimerPhase, TimingMethod};
-use livesplit_server::{handle_command, parse_command, ServerCommand, ServerHandle};
-use livesplit_ui::{
-    configure_fonts, load_layout, save_layout, Layout, LayoutMode, Renderer,
-};
+use rustsplit_core::{load_run, save_run, Run, Timer, TimerPhase, TimingMethod};
+use rustsplit_server::{handle_command, parse_command, ServerCommand, ServerHandle};
+use rustsplit_ui::{configure_fonts, load_layout, save_layout, Layout, LayoutMode, Renderer};
 
 use crate::config::AppConfig;
 use crate::control::ControlServer;
@@ -301,7 +299,8 @@ impl RustSplitApp {
                 self.file_purpose = Some(FilePurpose::SaveLayout);
             }
             Action::DefaultLayout => {
-                self.layout = Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
+                self.layout =
+                    Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
                 self.layout.file_path = None;
                 self.apply_layout_change(ctx);
                 self.set_status("Loaded the default layout.");
@@ -614,7 +613,8 @@ impl RustSplitApp {
                 self.file_purpose = Some(FilePurpose::SaveLayout);
             }
             LayoutEditorEvent::ResetDefault => {
-                self.layout = Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
+                self.layout =
+                    Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
                 self.apply_layout_change(ctx);
             }
         }
@@ -733,7 +733,10 @@ impl RustSplitApp {
             Ok(server) => {
                 self.config.server.enabled = true;
                 self.server_error = None;
-                self.set_status(format!("LiveSplit Server listening on port {}", server.port()));
+                self.set_status(format!(
+                    "LiveSplit Server listening on port {}",
+                    server.port()
+                ));
                 self.server = Some(server);
                 self.save_config();
             }
@@ -769,11 +772,7 @@ impl RustSplitApp {
         }
     }
 
-    fn apply_server_command(
-        &mut self,
-        ctx: &Context,
-        command: &ServerCommand,
-    ) -> Option<String> {
+    fn apply_server_command(&mut self, ctx: &Context, command: &ServerCommand) -> Option<String> {
         match command {
             ServerCommand::SwitchSplits(path) => {
                 let ok = self.open_run_path(ctx, &PathBuf::from(path));
@@ -855,18 +854,8 @@ impl RustSplitApp {
 
     fn desired_niri_window(&self) -> DesiredWindow {
         let (fallback_width, fallback_height) = computed_window_size(&self.layout, &self.timer);
-        let width = self
-            .config
-            .niri
-            .width
-            .unwrap_or(fallback_width)
-            .max(80.0);
-        let height = self
-            .config
-            .niri
-            .height
-            .unwrap_or(fallback_height)
-            .max(40.0);
+        let width = self.config.niri.width.unwrap_or(fallback_width).max(80.0);
+        let height = self.config.niri.height.unwrap_or(fallback_height).max(40.0);
         DesiredWindow {
             x: self.config.niri.x.map(f64::from),
             y: self.config.niri.y.map(f64::from),
@@ -1219,7 +1208,11 @@ impl RustSplitApp {
         // Whole-window drag support.  Buttons and dialogs sit above this
         // interaction in egui's layer order.
         if self.layout.settings.allow_moving {
-            let response = ui.interact(rect, ui.scope_id().with("rustsplit-drag"), Sense::click_and_drag());
+            let response = ui.interact(
+                rect,
+                ui.scope_id().with("rustsplit-drag"),
+                Sense::click_and_drag(),
+            );
             if response.drag_started_by(PointerButton::Primary)
                 && !self.layout_editor.open
                 && !self.run_editor.open
@@ -1587,11 +1580,7 @@ fn computed_window_size(layout: &Layout, timer: &Timer) -> (f32, f32) {
 }
 
 /// Build the initial eframe options from the layout and saved window geometry.
-pub fn native_options(
-    layout: &Layout,
-    config: &AppConfig,
-    timer: &Timer,
-) -> eframe::NativeOptions {
+pub fn native_options(layout: &Layout, config: &AppConfig, timer: &Timer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("RustSplit")
         .with_app_id(niri::APP_ID)
@@ -1646,11 +1635,7 @@ pub fn load_initial_run(config: &mut AppConfig, cli_path: Option<&Path>) -> Run 
     Run::with_segments("", "", ["Segment 1"])
 }
 
-pub fn load_initial_layout(
-    config: &mut AppConfig,
-    run: &Run,
-    cli_path: Option<&Path>,
-) -> Layout {
+pub fn load_initial_layout(config: &mut AppConfig, run: &Run, cli_path: Option<&Path>) -> Layout {
     if let Some(path) = cli_path {
         if let Ok(layout) = load_layout(path) {
             config.remember_layout(path);
@@ -1665,10 +1650,7 @@ pub fn load_initial_layout(
             Some(if candidate.is_absolute() {
                 candidate
             } else {
-                run_path
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .join(candidate)
+                run_path.parent().unwrap_or(Path::new(".")).join(candidate)
             })
         };
         if let Some(path) = path {

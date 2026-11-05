@@ -1453,38 +1453,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
-name = "livesplit-core"
-version = "1.0.1"
-dependencies = [
- "base64",
- "chrono",
- "serde",
- "thiserror 2.0.21",
- "xmltree",
-]
-
-[[package]]
-name = "livesplit-server"
-version = "1.0.1"
-dependencies = [
- "livesplit-core",
- "log",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "livesplit-ui"
-version = "1.0.1"
-dependencies = [
- "base64",
- "egui",
- "image",
- "livesplit-core",
- "thiserror 2.0.21",
- "xmltree",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2337,13 +2305,45 @@ dependencies = [
  "env_logger",
  "global-hotkey",
  "image",
- "livesplit-core",
- "livesplit-server",
- "livesplit-ui",
  "log",
+ "rustsplit-core",
+ "rustsplit-server",
+ "rustsplit-ui",
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "rustsplit-core"
+version = "1.0.1"
+dependencies = [
+ "base64",
+ "chrono",
+ "serde",
+ "thiserror 2.0.21",
+ "xmltree",
+]
+
+[[package]]
+name = "rustsplit-server"
+version = "1.0.1"
+dependencies = [
+ "log",
+ "rustsplit-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rustsplit-ui"
+version = "1.0.1"
+dependencies = [
+ "base64",
+ "egui",
+ "image",
+ "rustsplit-core",
+ "thiserror 2.0.21",
+ "xmltree",
 ]
 
 [[package]]

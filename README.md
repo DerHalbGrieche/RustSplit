@@ -203,16 +203,16 @@ getsplitnames
 setgametime 00:01:23.45
 ```
 
-The server implementation lives in `crates/livesplit-server` and is covered by
+The server implementation lives in `crates/rustsplit-server` and is covered by
 protocol tests.
 
 ## Workspace layout
 
 ```
 crates/
-  livesplit-core/    Timer, run model, time formatting, comparisons, .lss
-  livesplit-ui/      Layout model, .lsl, egui components and renderer
-  livesplit-server/  TCP protocol and command handling
+  rustsplit-core/    Timer, run model, time formatting, comparisons, .lss
+  rustsplit-ui/      Layout model, .lsl, egui components and renderer
+  rustsplit-server/  TCP protocol and command handling
   rustsplit/         Desktop application, editors, hotkeys, configuration
 ```
 
@@ -241,7 +241,7 @@ RustSplit is inspired by and compatible with
 Sergey Papushin and contributors, and by
 [livesplit-core](https://github.com/LiveSplit/livesplit-core). Both are MIT
 licensed. The bundled DejaVu fonts are covered by the Bitstream Vera license;
-see `crates/livesplit-ui/assets/fonts/LICENSE-DejaVu.txt`.
+see `crates/rustsplit-ui/assets/fonts/LICENSE-DejaVu.txt`.
 
 RustSplit is not affiliated with the LiveSplit project. The LiveSplit name is
 used only to describe format and behavior compatibility. The application icon

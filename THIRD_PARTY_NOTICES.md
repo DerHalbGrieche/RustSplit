@@ -9,7 +9,7 @@ with or endorsed by the LiveSplit project.
 - **License:** MIT
 - **Copyright:** Copyright (c) 2013 Christopher Serr and Sergey Papushin
 - **Material used:**
-  - The stock layout data in `crates/livesplit-ui/assets/default.lsl`,
+  - The stock layout data in `crates/rustsplit-ui/assets/default.lsl`,
     which originates from LiveSplit's `DefaultLayout.lsl`.
   - Compatibility behavior and format knowledge derived from LiveSplit's
     C# source. The Rust implementation itself is original code.
@@ -30,9 +30,9 @@ The full MIT permission notice is reproduced in the root `LICENSE` file.
 
 - **Project:** https://dejavu-fonts.github.io/
 - **License:** Bitstream Vera Fonts license (permissive)
-- **Files:** `crates/livesplit-ui/assets/fonts/DejaVuSans.ttf`,
+- **Files:** `crates/rustsplit-ui/assets/fonts/DejaVuSans.ttf`,
   `DejaVuSans-Bold.ttf`, `DejaVuSansMono.ttf`, `DejaVuSansMono-Bold.ttf`
-- **License text:** `crates/livesplit-ui/assets/fonts/LICENSE-DejaVu.txt`
+- **License text:** `crates/rustsplit-ui/assets/fonts/LICENSE-DejaVu.txt`
 
 ## Rust dependencies
 

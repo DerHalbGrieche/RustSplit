@@ -12,13 +12,17 @@ mod run_editor;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use livesplit_core::Timer;
+use rustsplit_core::Timer;
 
 use crate::app::RustSplitApp;
 use crate::config::AppConfig;
 
 #[derive(Debug, Parser)]
-#[command(name = "rustsplit", version, about = "A native Rust rewrite of LiveSplit")]
+#[command(
+    name = "rustsplit",
+    version,
+    about = "A native Rust rewrite of LiveSplit"
+)]
 struct Args {
     /// Split file to open (.lss)
     #[arg(short = 's', long = "splits", value_name = "FILE")]

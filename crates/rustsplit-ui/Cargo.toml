@@ -1,0 +1,15 @@
+[package]
+name = "rustsplit-ui"
+description = "Layout model and egui rendering for RustSplit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rustsplit-core.workspace = true
+base64.workspace = true
+egui.workspace = true
+image.workspace = true
+thiserror.workspace = true
+xmltree.workspace = true

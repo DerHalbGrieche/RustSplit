@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/livesplit-core",
-    "crates/livesplit-ui",
-    "crates/livesplit-server",
+    "crates/rustsplit-core",
+    "crates/rustsplit-ui",
+    "crates/rustsplit-server",
     "crates/rustsplit",
 ]
 
@@ -15,9 +15,9 @@ license = "MIT"
 authors = ["RustSplit contributors"]
 
 [workspace.dependencies]
-livesplit-core = { path = "crates/livesplit-core" }
-livesplit-ui = { path = "crates/livesplit-ui" }
-livesplit-server = { path = "crates/livesplit-server" }
+rustsplit-core = { path = "crates/rustsplit-core" }
+rustsplit-ui = { path = "crates/rustsplit-ui" }
+rustsplit-server = { path = "crates/rustsplit-server" }
 
 anyhow = "1.0.100"
 base64 = "0.22.1"

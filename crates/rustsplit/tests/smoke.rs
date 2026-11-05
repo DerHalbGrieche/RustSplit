@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use livesplit_core::{load_run, PERSONAL_BEST};
-use livesplit_ui::layout::DEFAULT_LAYOUT_LSL;
-use livesplit_ui::parse_layout;
+use rustsplit_core::{load_run, PERSONAL_BEST};
+use rustsplit_ui::layout::DEFAULT_LAYOUT_LSL;
+use rustsplit_ui::parse_layout;
 
 #[test]
 fn demo_run_loads_and_has_expected_data() {

@@ -356,9 +356,10 @@ impl NiriIntegration {
     /// or the OpenGL viewport keeps its old width and clips the overlay.
     pub fn take_surface_sync(&mut self, width: f32, height: f32) -> bool {
         let target = (width, height);
-        if self.last_synced_surface.is_some_and(|last| {
-            (last.0 - width).abs() < 1.0 && (last.1 - height).abs() < 1.0
-        }) {
+        if self
+            .last_synced_surface
+            .is_some_and(|last| (last.0 - width).abs() < 1.0 && (last.1 - height).abs() < 1.0)
+        {
             return false;
         }
         self.last_synced_surface = Some(target);

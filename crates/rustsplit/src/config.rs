@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub hotkeys: HotkeyConfig,
@@ -15,17 +16,6 @@ pub struct AppConfig {
     pub niri: NiriConfig,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            hotkeys: HotkeyConfig::default(),
-            server: ServerConfig::default(),
-            window: WindowConfig::default(),
-            niri: NiriConfig::default(),
-        }
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,6 +41,7 @@ impl Default for GeneralConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct HotkeyConfig {
     pub enabled: bool,
     pub start_split: String,
@@ -66,24 +57,6 @@ pub struct HotkeyConfig {
     pub edit_layout: String,
 }
 
-impl Default for HotkeyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            start_split: String::new(),
-            reset: String::new(),
-            undo: String::new(),
-            skip: String::new(),
-            pause: String::new(),
-            undo_all_pauses: String::new(),
-            switch_comparison_next: String::new(),
-            switch_comparison_previous: String::new(),
-            toggle_timing_method: String::new(),
-            edit_run: String::new(),
-            edit_layout: String::new(),
-        }
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -107,6 +80,7 @@ impl Default for ServerConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct WindowConfig {
     pub width: Option<f32>,
     pub height: Option<f32>,
@@ -114,16 +88,6 @@ pub struct WindowConfig {
     pub y: Option<f32>,
 }
 
-impl Default for WindowConfig {
-    fn default() -> Self {
-        Self {
-            width: None,
-            height: None,
-            x: None,
-            y: None,
-        }
-    }
-}
 
 /// Niri-specific overlay geometry.
 ///
@@ -209,7 +173,6 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".rustsplit"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,10 +185,8 @@ mod tests {
         config.hotkeys.start_split = "F1".to_string();
         config.niri.auto_float = false;
         config.niri.x = Some(42.0);
-        let directory = std::env::temp_dir().join(format!(
-            "rustsplit-config-test-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("rustsplit-config-test-{}", std::process::id()));
         let path = directory.join("settings.toml");
         config.save(&path).unwrap();
         let loaded = AppConfig::load(&path);

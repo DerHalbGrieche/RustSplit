@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use egui::{Context, Grid, Key, RichText, ScrollArea, TextEdit};
 
-use livesplit_core::{format_time, Run, Segment, TimeAccuracy, TimeSpan};
+use rustsplit_core::{format_time, Run, Segment, TimeAccuracy, TimeSpan};
 
 use crate::config::AppConfig;
 
@@ -34,7 +34,7 @@ impl Default for RunEditor {
             open: false,
             draft: None,
             selected_segment: 0,
-            comparison: livesplit_core::PERSONAL_BEST.to_string(),
+            comparison: rustsplit_core::PERSONAL_BEST.to_string(),
             time_buffers: HashMap::new(),
             new_comparison: String::new(),
             error: None,
@@ -47,7 +47,7 @@ impl RunEditor {
         self.draft = Some(run.clone());
         self.open = true;
         self.selected_segment = 0;
-        self.comparison = livesplit_core::PERSONAL_BEST.to_string();
+        self.comparison = rustsplit_core::PERSONAL_BEST.to_string();
         self.time_buffers.clear();
         self.new_comparison.clear();
         self.error = None;
@@ -93,17 +93,9 @@ impl RunEditor {
                     ui.label("Game:");
                     ui.add(TextEdit::singleline(&mut draft.game_name).desired_width(230.0));
                     ui.label("Category:");
-                    ui.add(
-                        TextEdit::singleline(&mut draft.category_name).desired_width(230.0),
-                    );
+                    ui.add(TextEdit::singleline(&mut draft.category_name).desired_width(230.0));
                     ui.label("Offset:");
-                    time_edit_single(
-                        ui,
-                        buffers,
-                        "run-offset",
-                        &mut draft.offset,
-                        true,
-                    );
+                    time_edit_single(ui, buffers, "run-offset", &mut draft.offset, true);
                 });
                 ui.horizontal(|ui| {
                     ui.label("Attempt count:");
@@ -133,10 +125,7 @@ impl RunEditor {
                                 *selected_segment = draft.segments.len() - 1;
                             }
                             if ui
-                                .add_enabled(
-                                    draft.segments.len() > 1,
-                                    egui::Button::new("Remove"),
-                                )
+                                .add_enabled(draft.segments.len() > 1, egui::Button::new("Remove"))
                                 .clicked()
                                 && *selected_segment < draft.segments.len()
                             {
@@ -149,7 +138,9 @@ impl RunEditor {
                                 .add_enabled(*selected_segment > 0, egui::Button::new("↑"))
                                 .clicked()
                             {
-                                draft.segments.swap(*selected_segment, *selected_segment - 1);
+                                draft
+                                    .segments
+                                    .swap(*selected_segment, *selected_segment - 1);
                                 *selected_segment -= 1;
                             }
                             if ui
@@ -159,7 +150,9 @@ impl RunEditor {
                                 )
                                 .clicked()
                             {
-                                draft.segments.swap(*selected_segment, *selected_segment + 1);
+                                draft
+                                    .segments
+                                    .swap(*selected_segment, *selected_segment + 1);
                                 *selected_segment += 1;
                             }
                             ui.separator();
@@ -176,7 +169,7 @@ impl RunEditor {
                         ui.horizontal(|ui| {
                             ui.label("Custom comparisons:");
                             for name in draft.custom_comparisons.clone() {
-                                if name == livesplit_core::PERSONAL_BEST {
+                                if name == rustsplit_core::PERSONAL_BEST {
                                     ui.label(RichText::new("Personal Best").strong());
                                 } else {
                                     ui.label(&name);
@@ -211,83 +204,90 @@ impl RunEditor {
                             .id_salt("run-editor-segments-horizontal")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                        Grid::new("segments-grid")
-                            .num_columns(7)
-                            .min_col_width(80.0)
-                            .striped(true)
-                            .show(ui, |ui| {
-                                ui.strong("#");
-                                ui.strong("Name");
-                                ui.strong("Comparison RTA");
-                                ui.strong("Comparison IGT");
-                                ui.strong("Best RTA");
-                                ui.strong("Best IGT");
-                                ui.strong("History");
-                                ui.end_row();
+                                Grid::new("segments-grid")
+                                    .num_columns(7)
+                                    .min_col_width(80.0)
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("#");
+                                        ui.strong("Name");
+                                        ui.strong("Comparison RTA");
+                                        ui.strong("Comparison IGT");
+                                        ui.strong("Best RTA");
+                                        ui.strong("Best IGT");
+                                        ui.strong("History");
+                                        ui.end_row();
 
-                                for (index, segment) in draft.segments.iter_mut().enumerate() {
-                                    let selected = index == *selected_segment;
-                                    if ui
-                                        .selectable_label(selected, format!("{}", index + 1))
-                                        .clicked()
-                                    {
-                                        clicked_segment = Some(index);
-                                    }
-                                    ui.add(
-                                        TextEdit::singleline(&mut segment.name)
-                                            .desired_width(120.0),
-                                    );
-                                    let comp_key = format!("comp-real-{index}-{comparison}");
-                                    let comp_key_game = format!("comp-game-{index}-{comparison}");
-                                    let mut comp = if comparison == livesplit_core::PERSONAL_BEST
-                                    {
-                                        segment.personal_best()
-                                    } else {
-                                        segment.comparison(comparison)
-                                    };
-                                    time_edit(
-                                        ui,
-                                        buffers,
-                                        &comp_key,
-                                        &mut comp.real_time,
-                                        false,
-                                    );
-                                    time_edit(
-                                        ui,
-                                        buffers,
-                                        &comp_key_game,
-                                        &mut comp.game_time,
-                                        false,
-                                    );
-                                    if comparison == livesplit_core::PERSONAL_BEST {
-                                        segment.set_personal_best(comp);
-                                    } else {
-                                        segment.set_comparison(comparison.clone(), comp);
-                                    }
+                                        for (index, segment) in
+                                            draft.segments.iter_mut().enumerate()
+                                        {
+                                            let selected = index == *selected_segment;
+                                            if ui
+                                                .selectable_label(
+                                                    selected,
+                                                    format!("{}", index + 1),
+                                                )
+                                                .clicked()
+                                            {
+                                                clicked_segment = Some(index);
+                                            }
+                                            ui.add(
+                                                TextEdit::singleline(&mut segment.name)
+                                                    .desired_width(120.0),
+                                            );
+                                            let comp_key =
+                                                format!("comp-real-{index}-{comparison}");
+                                            let comp_key_game =
+                                                format!("comp-game-{index}-{comparison}");
+                                            let mut comp =
+                                                if comparison == rustsplit_core::PERSONAL_BEST {
+                                                    segment.personal_best()
+                                                } else {
+                                                    segment.comparison(comparison)
+                                                };
+                                            time_edit(
+                                                ui,
+                                                buffers,
+                                                &comp_key,
+                                                &mut comp.real_time,
+                                                false,
+                                            );
+                                            time_edit(
+                                                ui,
+                                                buffers,
+                                                &comp_key_game,
+                                                &mut comp.game_time,
+                                                false,
+                                            );
+                                            if comparison == rustsplit_core::PERSONAL_BEST {
+                                                segment.set_personal_best(comp);
+                                            } else {
+                                                segment.set_comparison(comparison.clone(), comp);
+                                            }
 
-                                    let best_key = format!("best-real-{index}");
-                                    let best_key_game = format!("best-game-{index}");
-                                    time_edit(
-                                        ui,
-                                        buffers,
-                                        &best_key,
-                                        &mut segment.best_segment_time.real_time,
-                                        false,
-                                    );
-                                    time_edit(
-                                        ui,
-                                        buffers,
-                                        &best_key_game,
-                                        &mut segment.best_segment_time.game_time,
-                                        false,
-                                    );
-                                    ui.label(format!(
-                                        "{} attempts",
-                                        segment.segment_history.len()
-                                    ));
-                                    ui.end_row();
-                                }
-                            });
+                                            let best_key = format!("best-real-{index}");
+                                            let best_key_game = format!("best-game-{index}");
+                                            time_edit(
+                                                ui,
+                                                buffers,
+                                                &best_key,
+                                                &mut segment.best_segment_time.real_time,
+                                                false,
+                                            );
+                                            time_edit(
+                                                ui,
+                                                buffers,
+                                                &best_key_game,
+                                                &mut segment.best_segment_time.game_time,
+                                                false,
+                                            );
+                                            ui.label(format!(
+                                                "{} attempts",
+                                                segment.segment_history.len()
+                                            ));
+                                            ui.end_row();
+                                        }
+                                    });
                             });
                         if let Some(index) = clicked_segment {
                             *selected_segment = index;
@@ -303,42 +303,54 @@ impl RunEditor {
                         .id_salt("run-editor-attempts")
                         .max_height(160.0)
                         .show(ui, |ui| {
-                        Grid::new("attempts-grid").num_columns(6).striped(true).show(ui, |ui| {
-                            ui.strong("ID");
-                            ui.strong("Time");
-                            ui.strong("Started");
-                            ui.strong("Ended");
-                            ui.strong("Pause");
-                            ui.label("");
-                            ui.end_row();
-                            for attempt in draft.attempts.iter() {
-                                ui.label(attempt.index.to_string());
-                                ui.label(format_time(attempt.time.real_time, TimeAccuracy::Milliseconds));
-                                ui.label(
-                                    attempt
-                                        .started
-                                        .map(|date| date.format("%Y-%m-%d %H:%M:%S").to_string())
-                                        .unwrap_or_default(),
-                                );
-                                ui.label(
-                                    attempt
-                                        .ended
-                                        .map(|date| date.format("%Y-%m-%d %H:%M:%S").to_string())
-                                        .unwrap_or_default(),
-                                );
-                                ui.label(
-                                    attempt
-                                        .pause_time
-                                        .map(|time| time.to_short_string(TimeAccuracy::Tenths))
-                                        .unwrap_or_default(),
-                                );
-                                if ui.small_button("Delete").clicked() {
-                                    delete_attempt = Some(attempt.index);
-                                }
-                                ui.end_row();
-                            }
+                            Grid::new("attempts-grid")
+                                .num_columns(6)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.strong("ID");
+                                    ui.strong("Time");
+                                    ui.strong("Started");
+                                    ui.strong("Ended");
+                                    ui.strong("Pause");
+                                    ui.label("");
+                                    ui.end_row();
+                                    for attempt in draft.attempts.iter() {
+                                        ui.label(attempt.index.to_string());
+                                        ui.label(format_time(
+                                            attempt.time.real_time,
+                                            TimeAccuracy::Milliseconds,
+                                        ));
+                                        ui.label(
+                                            attempt
+                                                .started
+                                                .map(|date| {
+                                                    date.format("%Y-%m-%d %H:%M:%S").to_string()
+                                                })
+                                                .unwrap_or_default(),
+                                        );
+                                        ui.label(
+                                            attempt
+                                                .ended
+                                                .map(|date| {
+                                                    date.format("%Y-%m-%d %H:%M:%S").to_string()
+                                                })
+                                                .unwrap_or_default(),
+                                        );
+                                        ui.label(
+                                            attempt
+                                                .pause_time
+                                                .map(|time| {
+                                                    time.to_short_string(TimeAccuracy::Tenths)
+                                                })
+                                                .unwrap_or_default(),
+                                        );
+                                        if ui.small_button("Delete").clicked() {
+                                            delete_attempt = Some(attempt.index);
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
                         });
-                    });
                 });
                 ui.collapsing("Metadata", |ui| {
                     Grid::new("metadata-grid").num_columns(2).show(ui, |ui| {
@@ -446,13 +458,13 @@ impl RunEditor {
         }
         if let Some(comparison) = delete_comparison {
             if let Some(draft) = self.draft.as_mut() {
-                if comparison != livesplit_core::PERSONAL_BEST {
+                if comparison != rustsplit_core::PERSONAL_BEST {
                     draft.custom_comparisons.retain(|name| name != &comparison);
                     for segment in &mut draft.segments {
                         segment.comparisons.remove(&comparison);
                     }
                     if self.comparison == comparison {
-                        self.comparison = livesplit_core::PERSONAL_BEST.to_string();
+                        self.comparison = rustsplit_core::PERSONAL_BEST.to_string();
                     }
                 }
             }
@@ -494,19 +506,17 @@ fn time_edit(
     value: &mut Option<TimeSpan>,
     allow_negative: bool,
 ) {
-    let buffer = buffers
-        .entry(key.to_string())
-        .or_insert_with(|| {
-            value
-                .map(|time| {
-                    let mut formatter = livesplit_core::GeneralTimeFormatter::default();
-                    formatter.accuracy = TimeAccuracy::Milliseconds;
-                    formatter.null_format = livesplit_core::NullFormat::ZeroValue;
-                    formatter.show_days = false;
-                    formatter.format(Some(time))
-                })
-                .unwrap_or_default()
-        });
+    let buffer = buffers.entry(key.to_string()).or_insert_with(|| {
+        value
+            .map(|time| {
+                let mut formatter = rustsplit_core::GeneralTimeFormatter::default();
+                formatter.accuracy = TimeAccuracy::Milliseconds;
+                formatter.null_format = rustsplit_core::NullFormat::ZeroValue;
+                formatter.show_days = false;
+                formatter.format(Some(time))
+            })
+            .unwrap_or_default()
+    });
     let response = ui.add(
         TextEdit::singleline(buffer)
             .desired_width(86.0)
@@ -524,9 +534,9 @@ fn time_edit(
     }
     if response.lost_focus() {
         if let Some(time) = *value {
-            let mut formatter = livesplit_core::GeneralTimeFormatter::default();
+            let mut formatter = rustsplit_core::GeneralTimeFormatter::default();
             formatter.accuracy = TimeAccuracy::Milliseconds;
-            formatter.null_format = livesplit_core::NullFormat::ZeroValue;
+            formatter.null_format = rustsplit_core::NullFormat::ZeroValue;
             *buffer = formatter.format(Some(time));
         } else {
             buffer.clear();

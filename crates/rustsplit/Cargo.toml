@@ -12,9 +12,9 @@ name = "rustsplit"
 path = "src/main.rs"
 
 [dependencies]
-livesplit-core.workspace = true
-livesplit-ui.workspace = true
-livesplit-server.workspace = true
+rustsplit-core.workspace = true
+rustsplit-ui.workspace = true
+rustsplit-server.workspace = true
 
 chrono.workspace = true
 clap.workspace = true

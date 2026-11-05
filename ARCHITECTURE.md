@@ -4,12 +4,12 @@ RustSplit is split into four crates with a one-way dependency graph:
 
 ```
 rustsplit (binary)
- ├── livesplit-ui ──┐
- ├── livesplit-server ─┤
- └── livesplit-core ◄─┘
+ ├── rustsplit-ui ──┐
+ ├── rustsplit-server ─┤
+ └── rustsplit-core ◄─┘
 ```
 
-## livesplit-core
+## rustsplit-core
 
 The timer and data model. It has no UI dependencies and is deterministic when
 given a custom `Clock`.
@@ -36,7 +36,7 @@ The timer stores a `Run`. The UI never mutates timer internals directly; it
 calls state-machine methods and reads `current_time`, the run's segments and
 the analysis helpers.
 
-## livesplit-ui
+## rustsplit-ui
 
 Layout and rendering. The crate is independent of the application and could be
 reused by another frontend.
@@ -58,7 +58,7 @@ reused by another frontend.
 - `canvas.rs` — gradients, shadows, outlines, text fitting and separators.
 - `icon.rs` — lazy icon decoding and texture caching.
 
-## livesplit-server
+## rustsplit-server
 
 A `std::net` TCP server. Each client thread parses newline-delimited commands
 and sends `ServerRequest`s over a channel. The app polls the channel, mutates
@@ -87,7 +87,7 @@ The desktop application and integration layer:
 1. Timer state changes (keys, server, menu, editor) go through `Timer`.
 2. The renderer reads a snapshot: current phase/time, run segments, current
    comparison and timing method.
-3. Components compute display values with `livesplit_core::analysis` and the
+3. Components compute display values with `rustsplit_core::analysis` and the
    time formatters, then paint with egui.
 4. When a run is reset, `Timer::reset` updates attempt history, best segments,
    PB comparisons and segment history before the UI saves.

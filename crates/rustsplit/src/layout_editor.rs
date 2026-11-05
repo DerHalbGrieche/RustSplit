@@ -2,10 +2,8 @@
 
 use egui::{Context, Grid, Key, RichText, ScrollArea, TextEdit};
 
-use livesplit_ui::components::{
-    default_component_for_path, ADDABLE_COMPONENTS,
-};
-use livesplit_ui::{color_to_hex, parse_color, GradientType, Layout, LayoutMode, LayoutSettings};
+use rustsplit_ui::components::{default_component_for_path, ADDABLE_COMPONENTS};
+use rustsplit_ui::{color_to_hex, parse_color, GradientType, Layout, LayoutMode, LayoutSettings};
 
 use crate::config::AppConfig;
 
@@ -94,11 +92,7 @@ impl LayoutEditor {
                     egui::ComboBox::from_id_salt("layout-mode")
                         .selected_text(draft.mode.label())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut draft.mode,
-                                LayoutMode::Vertical,
-                                "Vertical",
-                            );
+                            ui.selectable_value(&mut draft.mode, LayoutMode::Vertical, "Vertical");
                             ui.selectable_value(
                                 &mut draft.mode,
                                 LayoutMode::Horizontal,
@@ -115,10 +109,7 @@ impl LayoutEditor {
                     ui.add(egui::DragValue::new(&mut draft.vertical_height).range(20..=5000));
                 });
                 ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(!*show_global, "Components")
-                        .clicked()
-                    {
+                    if ui.selectable_label(!*show_global, "Components").clicked() {
                         *show_global = false;
                     }
                     if ui.selectable_label(*show_global, "Appearance").clicked() {
@@ -164,18 +155,12 @@ impl LayoutEditor {
                                 .max_width(230.0)
                                 .max_height(480.0)
                                 .show(ui, |ui| {
-                                    for (index, component) in
-                                        draft.components.iter().enumerate()
-                                    {
+                                    for (index, component) in draft.components.iter().enumerate() {
                                         let selected_now = index == *selected;
                                         if ui
                                             .selectable_label(
                                                 selected_now,
-                                                format!(
-                                                    "{}  ({})",
-                                                    component.name(),
-                                                    index + 1
-                                                ),
+                                                format!("{}  ({})", component.name(), index + 1),
                                             )
                                             .clicked()
                                         {
@@ -218,9 +203,7 @@ impl LayoutEditor {
                                 .max_width(600.0)
                                 .max_height(480.0)
                                 .show(ui, |ui| {
-                                    if let Some(component) =
-                                        draft.components.get_mut(*selected)
-                                    {
+                                    if let Some(component) = draft.components.get_mut(*selected) {
                                         ui.heading(component.name());
                                         ui.label(
                                             RichText::new(&component.path)
@@ -228,9 +211,7 @@ impl LayoutEditor {
                                                 .color(ui.visuals().weak_text_color()),
                                         );
                                         ui.separator();
-                                        component
-                                            .component
-                                            .settings_ui(ui, &mut draft.settings);
+                                        component.component.settings_ui(ui, &mut draft.settings);
                                         ui.separator();
                                         ui.collapsing("Font overrides", |ui| {
                                             let overrides = &mut component.font_overrides;
@@ -321,7 +302,8 @@ impl LayoutEditor {
         }
         if event == LayoutEditorEvent::ResetDefault {
             if let Some(draft) = self.draft.as_mut() {
-                let default = Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
+                let default =
+                    Layout::parse_default().unwrap_or_else(|_| Layout::livesplit_default());
                 let file_path = draft.file_path.clone();
                 *draft = default;
                 draft.file_path = file_path;
@@ -343,7 +325,7 @@ fn font_override_ui(
     label: &str,
     id: &str,
     enabled: &mut bool,
-    font: &mut livesplit_ui::FontSpec,
+    font: &mut rustsplit_ui::FontSpec,
 ) {
     ui.horizontal(|ui| {
         ui.checkbox(enabled, label);
@@ -396,10 +378,7 @@ fn global_settings_ui(ui: &mut egui::Ui, settings: &mut LayoutSettings) {
                         .small()
                         .color(ui.visuals().weak_text_color()),
                 );
-                if changed
-                    && !settings.transparent_background
-                    && !settings.has_background()
-                {
+                if changed && !settings.transparent_background && !settings.has_background() {
                     settings.background_color = egui::Color32::from_rgb(15, 15, 15);
                     settings.background_color2 = egui::Color32::TRANSPARENT;
                     settings.background_gradient = GradientType::Plain;

@@ -64,7 +64,10 @@ impl FileDialog {
         self.mode = mode;
         self.title = title.into();
         self.filename = filename.into();
-        self.extensions = extensions.iter().map(|extension| extension.to_string()).collect();
+        self.extensions = extensions
+            .iter()
+            .map(|extension| extension.to_string())
+            .collect();
         self.directory = start
             .map(|path| {
                 if path.is_dir() {
@@ -277,7 +280,6 @@ impl FileDialog {
         action
     }
 }
-
 
 #[cfg(test)]
 mod tests {
